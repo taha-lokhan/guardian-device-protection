@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guardian — Control Panel</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:#0a0b0d;color:#e2e4e9;min-height:100vh}
+#login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:16px}
+#login-screen input{padding:12px 16px;background:#1c1b19;border:1px solid #2a2927;border-radius:8px;color:#e2e4e9;font-size:15px;width:300px;outline:none}
+#login-screen button{padding:12px 24px;background:#01696f;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:300px}
+#login-screen h1{font-size:28px;color:#4f98a3;margin-bottom:8px}
+#app{display:none;flex-direction:column;height:100vh}
+.topbar{display:flex;align-items:center;gap:16px;padding:14px 24px;background:#111318;border-bottom:1px solid rgba(255,255,255,0.06)}
+.topbar h1{font-size:18px;color:#4f98a3;font-weight:700;margin-right:auto}
+.conn-status{font-size:12px;padding:4px 10px;border-radius:20px;font-weight:600}
+.conn-online{background:rgba(34,197,94,0.15);color:#4ade80}
+.conn-offline{background:rgba(239,68,68,0.15);color:#f87171}
+.main{display:flex;flex:1;overflow:hidden}
+.sidebar{width:340px;background:#111318;border-right:1px solid rgba(255,255,255,0.06);overflow-y:auto;display:flex;flex-direction:column}
+.map-area{flex:1;position:relative}
+#map{width:100%;height:100%}
+.section-title{padding:14px 16px 8px;font-size:11px;font-weight:600;letter-spacing:1.5px;color:#374151;text-transform:uppercase}
+.device-card{margin:0 8px 8px;background:#1a1c22;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:14px;cursor:pointer;transition:border-color 0.15s}
+.device-card:hover,.device-card.selected{border-color:#4f98a3}
+.device-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.device-icon{font-size:20px}
+.device-name{font-weight:600;font-size:14px}
+.device-id{font-size:11px;color:#6b7280;font-family:monospace}
+.status-dot{width:8px;height:8px;border-radius:50%;margin-left:auto}
+.status-online{background:#4ade80}
+.status-offline{background:#6b7280}
+.device-meta{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+.meta-item{font-size:11px;color:#9ca3af}
+.meta-val{font-size:11px;color:#e2e4e9;font-weight:500}
+.cmd-panel{padding:12px 8px;border-top:1px solid rgba(255,255,255,0.06);margin-top:auto}
+.cmd-title{padding:0 8px 10px;font-size:11px;font-weight:600;letter-spacing:1.5px;color:#374151;text-transform:uppercase}
+.cmd-btn{display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;margin-bottom:6px;border:1px solid rgba(255,255,255,0.08);border-radius:8px;background:#1a1c22;color:#e2e4e9;font-size:13px;cursor:pointer;transition:all 0.15s;text-align:left}
+.cmd-btn:hover{border-color:#4f98a3;background:#1f2430}
+.cmd-btn.danger{border-color:rgba(239,68,68,0.3);color:#f87171}
+.cmd-btn.danger:hover{border-color:#ef4444;background:#2a1a1a}
+.cmd-btn:disabled{opacity:0.4;cursor:not-allowed}
+.log-panel{padding:8px}
+.log-entry{font-size:11px;font-family:monospace;padding:4px 8px;border-radius:4px;margin-bottom:2px;color:#9ca3af}
+.log-entry:nth-child(odd){background:rgba(255,255,255,0.02)}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:1000;display:none}
+.modal{background:#1a1c22;border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:28px;width:420px;max-width:90vw}
+.modal h3{font-size:18px;margin-bottom:8px}
+.modal p{font-size:13px;color:#9ca3af;margin-bottom:16px;line-height:1.6}
+.modal input{width:100%;padding:10px 14px;background:#111318;border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#e2e4e9;font-size:14px;margin-bottom:10px;outline:none}
+.modal-btns{display:flex;gap:8px;margin-top:8px}
+.modal-btns button{flex:1;padding:10px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer}
+.btn-cancel{background:#2a2927;color:#9ca3af}
+.btn-confirm{background:#ef4444;color:#fff}
+.btn-confirm-safe{background:#01696f;color:#fff}
+.no-device{padding:32px 16px;text-align:center;color:#4b5563;font-size:13px}
+</style>
+</head>
+<body>
+
+<div id="login-screen">
+  <h1>🛡️ GUARDIAN</h1>
+  <p style="color:#6b7280;font-size:14px;margin-bottom:16px">Device Protection System</p>
+  <input id="relay-addr" type="text" placeholder="Relay address (e.g. 10.99.0.1:8443)" value="10.99.0.1:8443">
+  <input id="login-pass" type="password" placeholder="Master password">
+  <button onclick="doLogin()">Connect</button>
+  <p id="login-err" style="color:#f87171;font-size:13px;display:none"></p>
+</div>
+
+<div id="app">
+  <div class="topbar">
+    <h1>🛡️ GUARDIAN</h1>
+    <span id="conn-status" class="conn-status conn-offline">● Connecting...</span>
+    <button onclick="doLogout()" style="padding:6px 14px;background:#1a1c22;border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#9ca3af;cursor:pointer;font-size:13px">Logout</button>
+  </div>
+  <div class="main">
+    <div class="sidebar">
+      <div class="section-title">Devices</div>
+      <div id="device-list"><div class="no-device">No devices online</div></div>
+      <div class="cmd-panel" id="cmd-panel" style="display:none">
+        <div class="cmd-title">Commands — <span id="cmd-device-name">-</span></div>
+        <button class="cmd-btn" onclick="cmdLocate()">📍 Request Location</button>
+        <button class="cmd-btn" onclick="cmdBackup()">💾 Backup Files</button>
+        <button class="cmd-btn" onclick="cmdLock()">🔒 Lock Device</button>
+        <button class="cmd-btn danger" onclick="cmdWipe()">⚠️ Remote Wipe</button>
+      </div>
+      <div class="section-title" style="margin-top:8px">Audit Log</div>
+      <div id="log-list" class="log-panel"></div>
+    </div>
+    <div class="map-area"><div id="map"></div></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal">
+    <h3 id="modal-title">Confirm Action</h3>
+    <p id="modal-desc"></p>
+    <input id="modal-phrase" placeholder="Type confirmation phrase" style="display:none">
+    <input id="modal-totp" placeholder="6-digit TOTP code" style="display:none" maxlength="6">
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button id="modal-confirm-btn" class="btn-confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let token = null, ws = null, devices = {}, selectedDevice = null, map = null, markers = {};
+let relayBase = '';
+
+function doLogin() {
+  const addr = document.getElementById('relay-addr').value.trim();
+  const pass  = document.getElementById('login-pass').value;
+  relayBase = 'http://' + addr;
+  fetch(relayBase + '/auth/login', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({password: pass})
+  }).then(r => r.ok ? r.json() : Promise.reject(r))
+  .then(data => {
+    token = data.token;
+    document.getElementById('login-screen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    initMap();
+    connectWS();
+    loadLog();
+  }).catch(() => {
+    const el = document.getElementById('login-err');
+    el.style.display = 'block';
+    el.textContent = 'Login failed. Check password and relay address.';
+  });
+}
+
+function doLogout() {
+  token = null; if (ws) ws.close();
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+function initMap() {
+  if (map) return;
+  map = L.map('map', {zoomControl: true}).setView([25, 45], 5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors', maxZoom: 18
+  }).addTo(map);
+}
+
+function connectWS() {
+  const wsUrl = 'ws://' + document.getElementById('relay-addr').value.trim() + '/ws';
+  ws = new WebSocket(wsUrl, [], {headers: {authorization: 'Bearer ' + token}});
+  ws.onopen = () => setConnStatus(true);
+  ws.onclose = () => { setConnStatus(false); setTimeout(connectWS, 5000); };
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.event === 'init' || msg.event === 'device_update') {
+      devices = msg.devices || {};
+      renderDevices();
+      updateMarkers();
+    }
+  };
+}
+
+function setConnStatus(online) {
+  const el = document.getElementById('conn-status');
+  el.className = 'conn-status ' + (online ? 'conn-online' : 'conn-offline');
+  el.textContent = online ? '● Connected' : '● Disconnected';
+}
+
+function renderDevices() {
+  const el = document.getElementById('device-list');
+  const devs = Object.values(devices);
+  if (!devs.length) { el.innerHTML = '<div class="no-device">No devices online</div>'; return; }
+  el.innerHTML = devs.map(d => {
+    const icon = d.type === 'android' ? '📱' : '💻';
+    const online = d.status === 'online';
+    const loc = d.location ? `${d.location.lat?.toFixed(4)}, ${d.location.lon?.toFixed(4)}` : 'Unknown';
+    const bat = d.battery != null ? d.battery + '%' : '—';
+    const sel = selectedDevice === d.device_id ? 'selected' : '';
+    return `<div class="device-card ${sel}" onclick="selectDevice('${d.device_id}')">
+      <div class="device-header">
+        <span class="device-icon">${icon}</span>
+        <div><div class="device-name">${d.name}</div><div class="device-id">${d.device_id}</div></div>
+        <span class="status-dot ${online ? 'status-online' : 'status-offline'}"></span>
+      </div>
+      <div class="device-meta">
+        <span class="meta-item">Battery</span><span class="meta-val">${bat}</span>
+        <span class="meta-item">Location</span><span class="meta-val" style="word-break:break-all">${loc}</span>
+        <span class="meta-item">WG IP</span><span class="meta-val">${d.ip || '—'}</span>
+        <span class="meta-item">Status</span><span class="meta-val" style="color:${online?'#4ade80':'#6b7280'}">${d.status}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function selectDevice(id) {
+  selectedDevice = id;
+  renderDevices();
+  const panel = document.getElementById('cmd-panel');
+  panel.style.display = 'block';
+  document.getElementById('cmd-device-name').textContent = devices[id]?.name || id;
+  const d = devices[id];
+  if (d?.location?.lat && map) map.setView([d.location.lat, d.location.lon], 13);
+}
+
+function updateMarkers() {
+  Object.values(devices).forEach(d => {
+    if (!d.location?.lat) return;
+    const pos = [d.location.lat, d.location.lon];
+    if (markers[d.device_id]) {
+      markers[d.device_id].setLatLng(pos);
+    } else {
+      const icon = d.type === 'android' ? '📱' : '💻';
+      markers[d.device_id] = L.marker(pos, {
+        icon: L.divIcon({html: `<div style="font-size:24px">${icon}</div>`, iconSize:[30,30], iconAnchor:[15,15]})
+      }).addTo(map).bindPopup(`<b>${d.name}</b><br>${d.device_id}`);
+    }
+  });
+}
+
+function apiCmd(endpoint, body) {
+  return fetch(relayBase + endpoint, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'Authorization':'Bearer '+token},
+    body: JSON.stringify({device_id: selectedDevice, ...body})
+  }).then(r => r.json());
+}
+
+function cmdLocate() {
+  if (!selectedDevice) return;
+  apiCmd('/cmd/locate', {}).then(() => addLog('locate', selectedDevice));
+}
+
+let pendingAction = null;
+function openModal(title, desc, action, confirmClass='btn-confirm') {
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-desc').textContent = desc;
+  document.getElementById('modal-phrase').style.display = 'block';
+  document.getElementById('modal-totp').style.display = 'block';
+  document.getElementById('modal-phrase').value = '';
+  document.getElementById('modal-totp').value = '';
+  document.getElementById('modal-confirm-btn').className = confirmClass;
+  document.getElementById('modal-overlay').style.display = 'flex';
+  pendingAction = action;
+}
+function closeModal() {
+  document.getElementById('modal-overlay').style.display = 'none';
+  pendingAction = null;
+}
+document.getElementById('modal-confirm-btn').onclick = () => {
+  if (pendingAction) pendingAction();
+};
+
+function cmdLock() {
+  if (!selectedDevice) return;
+  openModal('🔒 Lock Device',
+    'Type: CONFIRM-DEVICE-LOCK\nThen enter your TOTP code.',
+    () => {
+      const phrase = document.getElementById('modal-phrase').value;
+      const totp   = document.getElementById('modal-totp').value;
+      apiCmd('/cmd/lock', {phrase, totp, timestamp: Date.now()/1000, nonce: Math.random().toString(36).slice(2)})
+      .then(r => { closeModal(); addLog('lock', selectedDevice, JSON.stringify(r)); })
+      .catch(e => alert('Failed: ' + JSON.stringify(e)));
+    }, 'btn-confirm-safe');
+}
+
+function cmdBackup() {
+  if (!selectedDevice) return;
+  openModal('💾 Backup Files',
+    'Type: CONFIRM-BACKUP-NOW\nThen enter your TOTP code.',
+    () => {
+      const phrase = document.getElementById('modal-phrase').value;
+      const totp   = document.getElementById('modal-totp').value;
+      apiCmd('/cmd/backup', {phrase, totp, timestamp: Date.now()/1000, nonce: Math.random().toString(36).slice(2)})
+      .then(r => { closeModal(); addLog('backup', selectedDevice, JSON.stringify(r)); })
+      .catch(e => alert('Failed: ' + JSON.stringify(e)));
+    }, 'btn-confirm-safe');
+}
+
+function cmdWipe() {
+  if (!selectedDevice) return;
+  openModal('⚠️ REMOTE WIPE — IRREVERSIBLE',
+    'ALL DATA WILL BE DELETED. This cannot be undone.\n\nType: CONFIRM-WIPE-ALL-DATA\nThen enter your TOTP code.',
+    () => {
+      const phrase = document.getElementById('modal-phrase').value;
+      const totp   = document.getElementById('modal-totp').value;
+      apiCmd('/cmd/wipe', {phrase, totp, timestamp: Date.now()/1000, nonce: Math.random().toString(36).slice(2), backup_confirmed: true})
+      .then(r => { closeModal(); addLog('wipe', selectedDevice, JSON.stringify(r)); })
+      .catch(e => alert('Failed: ' + JSON.stringify(e)));
+    });
+}
+
+function loadLog() {
+  fetch(relayBase + '/log', {headers: {'Authorization':'Bearer '+token}})
+  .then(r => r.json()).then(log => {
+    const el = document.getElementById('log-list');
+    el.innerHTML = log.slice(-20).reverse().map(e =>
+      `<div class="log-entry">${new Date(e.timestamp*1000).toLocaleTimeString()} [${e.device_id}] ${e.action}</div>`
+    ).join('');
+  });
+}
+
+function addLog(action, deviceId, detail='') {
+  const el = document.getElementById('log-list');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.textContent = `${new Date().toLocaleTimeString()} [${deviceId}] ${action}`;
+  el.prepend(entry);
+}
+
+document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+setInterval(loadLog, 30000);
+</script>
+</body>
+</html>
