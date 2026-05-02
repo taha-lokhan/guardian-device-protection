@@ -11,13 +11,13 @@ SETUP:
 
 import asyncio, json, time, secrets
 import pyotp, paho.mqtt.client as mqtt
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 import uvicorn
 
-# ── CONFIG — FILL ALL THESE IN BEFORE DEPLOYING ─────────────────────────────
+# ── CONFIG — FILL ALL THESE IN BEFORE DEPLOYING ────────────────────────────────
 MASTER_PASSWORD   = "CHANGE_THIS_STRONG_PASSWORD"
 
 # Generate your permanent TOTP secret ONCE:
@@ -32,9 +32,10 @@ MQTT_HOST         = "127.0.0.1"
 MQTT_PORT         = 1883
 COMMAND_EXPIRY_S  = 60
 MAX_FAILED_LOGINS = 5
+NONCE_TTL_S       = 120   # nonces older than this are purged
 
-# ── BACKUP CODES — save these to Bitwarden, each works once only ─────────────
-# Regenerate with: python3 -c "import secrets; [print('guardian-'+secrets.token_hex(4)) for _ in range(5)]"
+# ── BACKUP CODES — save these to Bitwarden, each works once only ───────────────
+# Regenerate: python3 -c "import secrets; [print('guardian-'+secrets.token_hex(4)) for _ in range(5)]"
 BACKUP_CODES = [
     "REPLACE_WITH_CODE_1",
     "REPLACE_WITH_CODE_2",
@@ -44,12 +45,13 @@ BACKUP_CODES = [
 ]
 used_backup_codes = set()
 
-# ── STATE ────────────────────────────────────────────────────────────────────
+# ── STATE ───────────────────────────────────────────────────────────────────────
 devices              = {}
 command_log          = []
-used_nonces          = set()
+used_nonces          = {}   # nonce -> timestamp (TTL-based, not infinite set)
 failed_logins        = 0
 dashboard_ws_clients = []
+_event_loop          = None
 
 app = FastAPI(title="Guardian Relay v1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -61,7 +63,7 @@ print(f"TOTP Secret in use: {TOTP_SECRET}")
 print(f"Add to Authy: otpauth://totp/Guardian?secret={TOTP_SECRET}&issuer=Guardian")
 print(f"{'='*55}\n")
 
-# ── AUTH ─────────────────────────────────────────────────────────────────────
+# ── AUTH ────────────────────────────────────────────────────────────────────────
 def verify_token(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Unauthorized")
@@ -69,6 +71,12 @@ def verify_token(authorization: str = Header(None)):
         jwt.decode(authorization[7:], JWT_SECRET, algorithms=["HS256"])
     except JWTError:
         raise HTTPException(401, "Invalid token")
+
+def purge_old_nonces():
+    now = time.time()
+    expired = [k for k, v in used_nonces.items() if now - v > NONCE_TTL_S]
+    for k in expired:
+        del used_nonces[k]
 
 def verify_destructive_command(cmd: dict):
     errors = []
@@ -82,8 +90,8 @@ def verify_destructive_command(cmd: dict):
         errors.append(f"Wrong confirmation phrase. Required: '{required_phrase}'")
 
     # TOTP check — accepts live code OR a valid backup code
-    totp       = pyotp.TOTP(TOTP_SECRET)
-    totp_valid = totp.verify(str(cmd.get("totp", "")), valid_window=1)
+    totp        = pyotp.TOTP(TOTP_SECRET)
+    totp_valid  = totp.verify(str(cmd.get("totp", "")), valid_window=1)
     backup_code = cmd.get("backup_code", "").strip()
     backup_valid = (
         backup_code in BACKUP_CODES and
@@ -102,20 +110,22 @@ def verify_destructive_command(cmd: dict):
     if abs(time.time() - cmd_time) > COMMAND_EXPIRY_S:
         errors.append(f"Command expired (must be within {COMMAND_EXPIRY_S}s)")
 
+    purge_old_nonces()
     nonce = cmd.get("nonce")
     if not nonce or nonce in used_nonces:
         errors.append("Invalid or replayed nonce")
     else:
-        used_nonces.add(nonce)
+        used_nonces[nonce] = time.time()
 
     if errors:
         raise HTTPException(400, {"errors": errors})
 
-# ── MQTT ──────────────────────────────────────────────────────────────────────
-mqtt_client = mqtt.Client()
+# ── MQTT ────────────────────────────────────────────────────────────────────────
+mqtt_client = mqtt.Client(clean_session=False, client_id="guardian-relay")
 mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
 
 def on_mqtt_message(client, userdata, msg):
+    """Runs in MQTT thread — must not call asyncio directly."""
     try:
         payload   = json.loads(msg.payload.decode())
         device_id = payload.get("device_id")
@@ -142,16 +152,48 @@ def on_mqtt_message(client, userdata, msg):
                 }
         elif msg.topic == "guardian/backup_complete":
             log_event(device_id, "backup_complete", payload.get("backup_id"))
-        asyncio.create_task(broadcast_to_dashboard({"event": "device_update", "devices": get_devices_safe()}))
+
+        # FIX: schedule coroutine safely from MQTT thread
+        if _event_loop and not _event_loop.is_closed():
+            _event_loop.call_soon_threadsafe(
+                _event_loop.create_task,
+                broadcast_to_dashboard({"event": "device_update", "devices": get_devices_safe()})
+            )
     except Exception as e:
         print(f"MQTT error: {e}")
 
 mqtt_client.on_message = on_mqtt_message
 mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
-mqtt_client.subscribe([("guardian/heartbeat", 0), ("guardian/location", 0), ("guardian/backup_complete", 0)])
+mqtt_client.subscribe([
+    ("guardian/heartbeat", 1),
+    ("guardian/location", 1),
+    ("guardian/backup_complete", 1)
+])
 mqtt_client.loop_start()
 
-# ── HELPERS ───────────────────────────────────────────────────────────────────
+# ── BACKGROUND TASKS ────────────────────────────────────────────────────────────
+async def offline_checker():
+    """Runs every 60s — marks devices offline and pushes update to dashboard."""
+    while True:
+        await asyncio.sleep(60)
+        changed = False
+        for d in devices.values():
+            was_online = d.get("status") == "online"
+            is_online  = (time.time() - d.get("last_seen", 0)) < 90
+            d["status"] = "online" if is_online else "offline"
+            if was_online and not is_online:
+                changed = True
+                log_event(d["device_id"], "device_offline", "no heartbeat for 90s")
+        if changed:
+            await broadcast_to_dashboard({"event": "device_update", "devices": get_devices_safe()})
+
+@app.on_event("startup")
+async def startup():
+    global _event_loop
+    _event_loop = asyncio.get_event_loop()
+    asyncio.create_task(offline_checker())
+
+# ── HELPERS ─────────────────────────────────────────────────────────────────────
 def get_devices_safe():
     result = {}
     for k, v in devices.items():
@@ -177,10 +219,10 @@ async def broadcast_to_dashboard(data: dict):
 
 def send_command(device_id: str, action: str, payload: dict = {}):
     msg = json.dumps({"action": action, "timestamp": time.time(), **payload})
-    mqtt_client.publish(f"guardian/cmd/{device_id}", msg)
+    mqtt_client.publish(f"guardian/cmd/{device_id}", msg, qos=1)
     log_event(device_id, action, payload)
 
-# ── ROUTES ────────────────────────────────────────────────────────────────────
+# ── ROUTES ───────────────────────────────────────────────────────────────────────
 @app.post("/auth/login")
 async def login(body: dict):
     global failed_logins
@@ -213,7 +255,13 @@ async def cmd_wipe(body: dict):
     if not body.get("backup_confirmed") and not body.get("skip_backup"):
         raise HTTPException(400, {"error": "backup_not_confirmed"})
     send_command(body["device_id"], "wipe")
-    return {"status": "sent", "warning": "IRREVERSIBLE"}
+    return {"status": "sent", "warning": "IRREVERSIBLE — device has 30s abort window"}
+
+@app.post("/cmd/abort_wipe", dependencies=[Depends(verify_token)])
+async def cmd_abort_wipe(body: dict):
+    send_command(body["device_id"], "abort_wipe")
+    log_event(body["device_id"], "abort_wipe", "abort sent from dashboard")
+    return {"status": "abort_sent"}
 
 @app.post("/cmd/backup", dependencies=[Depends(verify_token)])
 async def cmd_backup(body: dict):
@@ -226,12 +274,13 @@ async def cmd_locate(body: dict):
     send_command(body["device_id"], "locate")
     return {"status": "sent"}
 
+# ── WEBSOCKET — FIX: token via query param (browser WS doesn't support headers) ─
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
-    token = ws.headers.get("authorization", "").replace("Bearer ", "")
+    token = ws.query_params.get("token", "")
     try:
         jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
-    except:
+    except JWTError:
         await ws.close(code=1008)
         return
     await ws.accept()

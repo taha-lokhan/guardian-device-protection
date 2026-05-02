@@ -30,9 +30,15 @@ class GuardianService : Service() {
     private var lastLocation: Location? = null
     private var heartbeatTimer: Timer? = null
 
+    // Abort state for wipe
+    @Volatile private var wipeAbortRequested = false
+    private var wipeCancelIntent: PendingIntent? = null
+
     companion object {
-        const val CHANNEL_ID = "guardian_service"
-        const val NOTIF_ID   = 1001
+        const val CHANNEL_ID        = "guardian_service"
+        const val NOTIF_ID          = 1001
+        const val NOTIF_WIPE_ID     = 1002
+        const val ACTION_ABORT_WIPE = "com.guardian.agent.ABORT_WIPE"
     }
 
     override fun onCreate() {
@@ -45,7 +51,21 @@ class GuardianService : Service() {
         startHeartbeat()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Handle abort wipe action from notification button
+        if (intent?.action == ACTION_ABORT_WIPE) {
+            wipeAbortRequested = true
+            Log.i("Guardian", "Wipe abort requested via notification")
+            getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
+            updateNotification("✅ Wipe aborted")
+            mqttPublish("guardian/status", JSONObject().apply {
+                put("device_id", DEVICE_ID)
+                put("event", "wipe_aborted")
+            }.toString())
+        }
+        return START_STICKY
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
@@ -82,11 +102,17 @@ class GuardianService : Service() {
         try {
             mqttClient = MqttAsyncClient("tcp://$RELAY_IP:$MQTT_PORT", DEVICE_ID, MemoryPersistence())
             val opts = MqttConnectOptions().apply {
-                userName = MQTT_USER; password = MQTT_PASS.toCharArray()
-                isCleanSession = false; keepAliveInterval = 60; isAutomaticReconnect = true
+                userName = MQTT_USER
+                password = MQTT_PASS.toCharArray()
+                // FIX: cleanSession=false so commands queued while offline are delivered on reconnect
+                isCleanSession = false
+                keepAliveInterval = 60
+                isAutomaticReconnect = true
             }
             mqttClient!!.setCallback(object : MqttCallback {
-                override fun connectionLost(cause: Throwable?) {}
+                override fun connectionLost(cause: Throwable?) {
+                    Log.w("Guardian", "MQTT connection lost: ${cause?.message}")
+                }
                 override fun messageArrived(topic: String, message: MqttMessage) {
                     handleCommand(JSONObject(String(message.payload)))
                 }
@@ -94,6 +120,7 @@ class GuardianService : Service() {
             })
             mqttClient!!.connect(opts, null, object : IMqttActionListener {
                 override fun onSuccess(token: IMqttToken?) {
+                    // QoS 1 ensures command delivery even if briefly disconnected
                     mqttClient!!.subscribe("guardian/cmd/$DEVICE_ID", 1)
                     sendHeartbeat()
                 }
@@ -107,7 +134,7 @@ class GuardianService : Service() {
     private fun mqttPublish(topic: String, payload: String) {
         try {
             if (mqttClient?.isConnected == true)
-                mqttClient!!.publish(topic, MqttMessage(payload.toByteArray()))
+                mqttClient!!.publish(topic, MqttMessage(payload.toByteArray()).apply { qos = 1 })
         } catch (e: Exception) { Log.e("Guardian", "Publish error: $e") }
     }
 
@@ -130,14 +157,65 @@ class GuardianService : Service() {
 
     private fun handleCommand(cmd: JSONObject) {
         when (cmd.optString("action")) {
-            "locate" -> lastLocation?.let { publishLocation(it) }
-            "lock"   -> lockDevice()
-            "backup" -> doBackup()
-            "wipe"   -> {
-                updateNotification("⚠️ WIPE in 10s — Restart app to ABORT")
-                Handler(Looper.getMainLooper()).postDelayed({ doWipe() }, 10_000L)
+            "locate"     -> lastLocation?.let { publishLocation(it) }
+            "lock"       -> lockDevice()
+            "backup"     -> doBackup()
+            "abort_wipe" -> {
+                wipeAbortRequested = true
+                getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
+                updateNotification("✅ Wipe aborted remotely")
+                mqttPublish("guardian/status", JSONObject().apply {
+                    put("device_id", DEVICE_ID); put("event", "wipe_aborted")
+                }.toString())
+            }
+            "wipe" -> {
+                // Run wipe countdown on background thread
+                Thread { doWipeWithAbort() }.start()
             }
         }
+    }
+
+    private fun doWipeWithAbort() {
+        wipeAbortRequested = false
+
+        // Build abort notification with cancel button
+        val abortIntent = Intent(this, GuardianService::class.java).apply {
+            action = ACTION_ABORT_WIPE
+        }
+        wipeCancelIntent = PendingIntent.getService(
+            this, 99, abortIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val wipeNotif = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("⚠️ REMOTE WIPE IN 30s")
+            .setContentText("Tap ABORT to cancel. All data will be deleted.")
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .addAction(android.R.drawable.ic_delete, "ABORT WIPE", wipeCancelIntent)
+            .setOngoing(true)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(NOTIF_WIPE_ID, wipeNotif)
+
+        // 30-second countdown with abort checks every 5 seconds
+        for (i in 6 downTo 1) {
+            if (wipeAbortRequested) {
+                Log.i("Guardian", "Wipe aborted at ${(i) * 5}s remaining")
+                getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
+                updateNotification("✅ Wipe aborted")
+                return
+            }
+            Thread.sleep(5_000L)
+        }
+
+        if (wipeAbortRequested) {
+            getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
+            updateNotification("✅ Wipe aborted")
+            return
+        }
+
+        Log.i("Guardian", "Wipe countdown complete — executing")
+        getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
+        doWipe()
     }
 
     private fun lockDevice() {
@@ -169,7 +247,7 @@ class GuardianService : Service() {
     }
 
     private fun createNotificationChannel() {
-        val ch = NotificationChannel(CHANNEL_ID, "Guardian", NotificationManager.IMPORTANCE_LOW)
+        val ch = NotificationChannel(CHANNEL_ID, "Guardian", NotificationManager.IMPORTANCE_HIGH)
         getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
 
