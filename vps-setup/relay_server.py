@@ -1,7 +1,12 @@
 """
-Guardian Relay Server
+Guardian Relay Server — v1
 Runs on VPS. Handles device heartbeats, location, commands.
-Start: python3 relay_server.py
+
+SETUP:
+  1. Fill in MASTER_PASSWORD, TOTP_SECRET, MQTT_PASS below
+  2. Copy to VPS: scp relay_server.py ubuntu@YOUR_VPS:/opt/guardian/
+  3. Start: systemctl start guardian
+  4. Add TOTP_SECRET to Authy manually
 """
 
 import asyncio, json, time, secrets
@@ -12,9 +17,14 @@ from jose import jwt, JWTError
 from passlib.context import CryptContext
 import uvicorn
 
-# ── CONFIG — CHANGE THESE BEFORE DEPLOYING ─────────────────────────────────────────
+# ── CONFIG — FILL ALL THESE IN BEFORE DEPLOYING ─────────────────────────────
 MASTER_PASSWORD   = "CHANGE_THIS_STRONG_PASSWORD"
-TOTP_SECRET       = pyotp.random_base32()
+
+# Generate your permanent TOTP secret ONCE:
+#   python3 -c "import pyotp; print(pyotp.random_base32())"
+# Paste result here, then add it to Authy manually.
+TOTP_SECRET       = "REPLACE_WITH_YOUR_PERMANENT_TOTP_SECRET"
+
 JWT_SECRET        = secrets.token_hex(32)
 MQTT_USER         = "guardian"
 MQTT_PASS         = "REPLACE_WITH_MQTT_PASS_FROM_CREDENTIALS_FILE"
@@ -23,24 +33,35 @@ MQTT_PORT         = 1883
 COMMAND_EXPIRY_S  = 60
 MAX_FAILED_LOGINS = 5
 
-# ── STATE ─────────────────────────────────────────────────────────────────────────
+# ── BACKUP CODES — save these to Bitwarden, each works once only ─────────────
+# Regenerate with: python3 -c "import secrets; [print('guardian-'+secrets.token_hex(4)) for _ in range(5)]"
+BACKUP_CODES = [
+    "REPLACE_WITH_CODE_1",
+    "REPLACE_WITH_CODE_2",
+    "REPLACE_WITH_CODE_3",
+    "REPLACE_WITH_CODE_4",
+    "REPLACE_WITH_CODE_5",
+]
+used_backup_codes = set()
+
+# ── STATE ────────────────────────────────────────────────────────────────────
 devices              = {}
 command_log          = []
 used_nonces          = set()
 failed_logins        = 0
 dashboard_ws_clients = []
 
-app = FastAPI(title="Guardian Relay")
+app = FastAPI(title="Guardian Relay v1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 pwd_context = CryptContext(schemes=["bcrypt"])
 
-print(f"\n{'='*50}")
-print(f"GUARDIAN RELAY STARTING")
-print(f"TOTP Secret (add to authenticator app): {TOTP_SECRET}")
-print(f"TOTP URI: otpauth://totp/Guardian?secret={TOTP_SECRET}&issuer=Guardian")
-print(f"{'='*50}\n")
+print(f"\n{'='*55}")
+print(f"GUARDIAN RELAY v1 STARTING")
+print(f"TOTP Secret in use: {TOTP_SECRET}")
+print(f"Add to Authy: otpauth://totp/Guardian?secret={TOTP_SECRET}&issuer=Guardian")
+print(f"{'='*55}\n")
 
-# ── AUTH ───────────────────────────────────────────────────────────────────────────
+# ── AUTH ─────────────────────────────────────────────────────────────────────
 def verify_token(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Unauthorized")
@@ -59,21 +80,38 @@ def verify_destructive_command(cmd: dict):
     required_phrase = PHRASES.get(cmd.get("action"))
     if not required_phrase or cmd.get("phrase") != required_phrase:
         errors.append(f"Wrong confirmation phrase. Required: '{required_phrase}'")
-    totp = pyotp.TOTP(TOTP_SECRET)
-    if not totp.verify(str(cmd.get("totp", "")), valid_window=1):
-        errors.append("Invalid or expired TOTP code")
+
+    # TOTP check — accepts live code OR a valid backup code
+    totp       = pyotp.TOTP(TOTP_SECRET)
+    totp_valid = totp.verify(str(cmd.get("totp", "")), valid_window=1)
+    backup_code = cmd.get("backup_code", "").strip()
+    backup_valid = (
+        backup_code in BACKUP_CODES and
+        backup_code not in used_backup_codes and
+        backup_code != "" and
+        not backup_code.startswith("REPLACE_")
+    )
+
+    if not totp_valid and not backup_valid:
+        errors.append("Invalid TOTP code and no valid backup code provided")
+    elif backup_valid:
+        used_backup_codes.add(backup_code)
+        log_event(cmd.get("device_id", "unknown"), "backup_code_used", backup_code[:8] + "...")
+
     cmd_time = cmd.get("timestamp", 0)
     if abs(time.time() - cmd_time) > COMMAND_EXPIRY_S:
-        errors.append(f"Command expired")
+        errors.append(f"Command expired (must be within {COMMAND_EXPIRY_S}s)")
+
     nonce = cmd.get("nonce")
     if not nonce or nonce in used_nonces:
         errors.append("Invalid or replayed nonce")
     else:
         used_nonces.add(nonce)
+
     if errors:
         raise HTTPException(400, {"errors": errors})
 
-# ── MQTT ──────────────────────────────────────────────────────────────────────────
+# ── MQTT ──────────────────────────────────────────────────────────────────────
 mqtt_client = mqtt.Client()
 mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
 
@@ -113,7 +151,7 @@ mqtt_client.connect(MQTT_HOST, MQTT_PORT, 60)
 mqtt_client.subscribe([("guardian/heartbeat", 0), ("guardian/location", 0), ("guardian/backup_complete", 0)])
 mqtt_client.loop_start()
 
-# ── HELPERS ────────────────────────────────────────────────────────────────────────
+# ── HELPERS ───────────────────────────────────────────────────────────────────
 def get_devices_safe():
     result = {}
     for k, v in devices.items():
@@ -142,7 +180,7 @@ def send_command(device_id: str, action: str, payload: dict = {}):
     mqtt_client.publish(f"guardian/cmd/{device_id}", msg)
     log_event(device_id, action, payload)
 
-# ── ROUTES ─────────────────────────────────────────────────────────────────────────
+# ── ROUTES ────────────────────────────────────────────────────────────────────
 @app.post("/auth/login")
 async def login(body: dict):
     global failed_logins
