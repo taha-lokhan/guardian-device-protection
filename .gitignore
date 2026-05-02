@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# Credentials — NEVER commit
+guardian_credentials.txt
+*.key
+wg0.conf
+
+# Android
+*.apk
+*.aab
+.gradle/
+build/
+local.properties
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
