@@ -1,316 +1,232 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Guardian — Control Panel</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Guardian Dashboard v2</title>
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',sans-serif;background:#0a0b0d;color:#e2e4e9;min-height:100vh}
-#login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:16px}
-#login-screen input{padding:12px 16px;background:#1c1b19;border:1px solid #2a2927;border-radius:8px;color:#e2e4e9;font-size:15px;width:300px;outline:none}
-#login-screen button{padding:12px 24px;background:#01696f;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:300px}
-#login-screen h1{font-size:28px;color:#4f98a3;margin-bottom:8px}
-#app{display:none;flex-direction:column;height:100vh}
-.topbar{display:flex;align-items:center;gap:16px;padding:14px 24px;background:#111318;border-bottom:1px solid rgba(255,255,255,0.06)}
-.topbar h1{font-size:18px;color:#4f98a3;font-weight:700;margin-right:auto}
-.conn-status{font-size:12px;padding:4px 10px;border-radius:20px;font-weight:600}
-.conn-online{background:rgba(34,197,94,0.15);color:#4ade80}
-.conn-offline{background:rgba(239,68,68,0.15);color:#f87171}
-.main{display:flex;flex:1;overflow:hidden}
-.sidebar{width:340px;background:#111318;border-right:1px solid rgba(255,255,255,0.06);overflow-y:auto;display:flex;flex-direction:column}
-.map-area{flex:1;position:relative}
-#map{width:100%;height:100%}
-.section-title{padding:14px 16px 8px;font-size:11px;font-weight:600;letter-spacing:1.5px;color:#374151;text-transform:uppercase}
-.device-card{margin:0 8px 8px;background:#1a1c22;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:14px;cursor:pointer;transition:border-color 0.15s}
-.device-card:hover,.device-card.selected{border-color:#4f98a3}
-.device-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
-.device-icon{font-size:20px}
-.device-name{font-weight:600;font-size:14px}
-.device-id{font-size:11px;color:#6b7280;font-family:monospace}
-.status-dot{width:8px;height:8px;border-radius:50%;margin-left:auto}
-.status-online{background:#4ade80}
-.status-offline{background:#6b7280}
-.device-meta{display:grid;grid-template-columns:1fr 1fr;gap:4px}
-.meta-item{font-size:11px;color:#9ca3af}
-.meta-val{font-size:11px;color:#e2e4e9;font-weight:500}
-.cmd-panel{padding:12px 8px;border-top:1px solid rgba(255,255,255,0.06);margin-top:auto}
-.cmd-title{padding:0 8px 10px;font-size:11px;font-weight:600;letter-spacing:1.5px;color:#374151;text-transform:uppercase}
-.cmd-btn{display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;margin-bottom:6px;border:1px solid rgba(255,255,255,0.08);border-radius:8px;background:#1a1c22;color:#e2e4e9;font-size:13px;cursor:pointer;transition:all 0.15s;text-align:left}
-.cmd-btn:hover{border-color:#4f98a3;background:#1f2430}
-.cmd-btn.danger{border-color:rgba(239,68,68,0.3);color:#f87171}
-.cmd-btn.danger:hover{border-color:#ef4444;background:#2a1a1a}
-.cmd-btn:disabled{opacity:0.4;cursor:not-allowed}
-.log-panel{padding:8px}
-.log-entry{font-size:11px;font-family:monospace;padding:4px 8px;border-radius:4px;margin-bottom:2px;color:#9ca3af}
-.log-entry:nth-child(odd){background:rgba(255,255,255,0.02)}
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:1000;display:none}
-.modal{background:#1a1c22;border:1px solid rgba(255,255,255,0.1);border-radius:12px;padding:28px;width:420px;max-width:90vw}
-.modal h3{font-size:18px;margin-bottom:8px}
-.modal p{font-size:13px;color:#9ca3af;margin-bottom:16px;line-height:1.6}
-.modal input{width:100%;padding:10px 14px;background:#111318;border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#e2e4e9;font-size:14px;margin-bottom:10px;outline:none}
-.modal-btns{display:flex;gap:8px;margin-top:8px}
-.modal-btns button{flex:1;padding:10px;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer}
-.btn-cancel{background:#2a2927;color:#9ca3af}
-.btn-confirm{background:#ef4444;color:#fff}
-.btn-confirm-safe{background:#01696f;color:#fff}
-.no-device{padding:32px 16px;text-align:center;color:#4b5563;font-size:13px}
+  :root {
+    --bg:#0d1117;--surface:#161b22;--border:#30363d;
+    --text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;
+    --danger:#f85149;--warn:#d29922;--ok:#3fb950;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:24px}
+  h1{font-size:1.4rem;margin-bottom:20px;display:flex;align-items:center;gap:10px}
+  .version-badge{background:var(--accent);color:#000;font-size:.65rem;padding:2px 8px;border-radius:20px;font-weight:700}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px}
+  .card h2{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
+  .device-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .device-name{font-weight:700;font-size:1rem}
+  .badge{font-size:.7rem;padding:2px 8px;border-radius:20px;font-weight:600}
+  .badge-online{background:#1a3a1f;color:var(--ok)}
+  .badge-offline{background:#3a1a1a;color:var(--danger)}
+  .info-row{display:flex;justify-content:space-between;font-size:.8rem;padding:4px 0;border-bottom:1px solid var(--border);color:var(--muted)}
+  .info-row:last-child{border-bottom:none}
+  .info-row span:last-child{color:var(--text)}
+  .btn{display:inline-block;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:.82rem;font-weight:600;transition:opacity .15s}
+  .btn:hover{opacity:.8}
+  .btn-primary{background:var(--accent);color:#000}
+  .btn-danger{background:var(--danger);color:#fff}
+  .btn-warn{background:var(--warn);color:#000}
+  .btn-muted{background:var(--border);color:var(--text)}
+  .btn-ok{background:var(--ok);color:#000}
+  .btn-group{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  .nuke-panel{background:#1a0a0a;border:1px solid var(--danger);border-radius:10px;padding:20px;margin-top:16px}
+  .nuke-panel h2{color:var(--danger)}
+  .countdown{font-size:2.5rem;font-weight:700;color:var(--danger);text-align:center;margin:12px 0;font-variant-numeric:tabular-nums}
+  .countdown-bar{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:10px}
+  .countdown-fill{height:100%;background:var(--danger);transition:width 1s linear}
+  .auth-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;z-index:100}
+  .auth-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:32px;width:320px}
+  .auth-box h2{margin-bottom:16px}
+  .auth-box input{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:.9rem;margin-bottom:10px}
+  .auth-box .err{color:var(--danger);font-size:.8rem;margin-top:6px}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:200}
+  .modal-overlay.open{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--danger);border-radius:12px;padding:32px;width:360px}
+  .modal h2{color:var(--danger);margin-bottom:14px}
+  .modal input{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);margin-bottom:10px;font-size:.9rem}
+  .modal .step-label{font-size:.8rem;color:var(--muted);margin-bottom:6px}
+  .modal .err{color:var(--danger);font-size:.8rem;margin:6px 0}
+  #toast{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;font-size:.85rem;opacity:0;transition:opacity .3s;pointer-events:none;z-index:999}
+  #toast.show{opacity:1}
 </style>
 </head>
 <body>
 
-<div id="login-screen">
-  <h1>🛡️ GUARDIAN</h1>
-  <p style="color:#6b7280;font-size:14px;margin-bottom:16px">Device Protection System</p>
-  <input id="relay-addr" type="text" placeholder="Relay address (e.g. 10.99.0.1:8443)" value="10.99.0.1:8443">
-  <input id="login-pass" type="password" placeholder="Master password">
-  <button onclick="doLogin()">Connect</button>
-  <p id="login-err" style="color:#f87171;font-size:13px;display:none"></p>
-</div>
-
-<div id="app">
-  <div class="topbar">
-    <h1>🛡️ GUARDIAN</h1>
-    <span id="conn-status" class="conn-status conn-offline">● Connecting...</span>
-    <button onclick="doLogout()" style="padding:6px 14px;background:#1a1c22;border:1px solid rgba(255,255,255,0.1);border-radius:6px;color:#9ca3af;cursor:pointer;font-size:13px">Logout</button>
-  </div>
-  <div class="main">
-    <div class="sidebar">
-      <div class="section-title">Devices</div>
-      <div id="device-list"><div class="no-device">No devices online</div></div>
-      <div class="cmd-panel" id="cmd-panel" style="display:none">
-        <div class="cmd-title">Commands — <span id="cmd-device-name">-</span></div>
-        <button class="cmd-btn" onclick="cmdLocate()">📍 Request Location</button>
-        <button class="cmd-btn" onclick="cmdBackup()">💾 Backup Files</button>
-        <button class="cmd-btn" onclick="cmdLock()">🔒 Lock Device</button>
-        <button class="cmd-btn danger" onclick="cmdWipe()">⚠️ Remote Wipe</button>
-      </div>
-      <div class="section-title" style="margin-top:8px">Audit Log</div>
-      <div id="log-list" class="log-panel"></div>
-    </div>
-    <div class="map-area"><div id="map"></div></div>
+<div class="auth-overlay" id="authOverlay">
+  <div class="auth-box">
+    <h2>🔐 Guardian v2</h2>
+    <input type="password" id="authPassword" placeholder="Master password" />
+    <input type="text"     id="authTotp"     placeholder="TOTP code (6 digits)" maxlength="6" />
+    <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Unlock</button>
+    <div class="err" id="authErr"></div>
   </div>
 </div>
 
-<div class="modal-overlay" id="modal-overlay">
-  <div class="modal" id="modal">
-    <h3 id="modal-title">Confirm Action</h3>
-    <p id="modal-desc"></p>
-    <input id="modal-phrase" placeholder="Type confirmation phrase" style="display:none">
-    <input id="modal-totp" placeholder="6-digit TOTP code" style="display:none" maxlength="6">
-    <div class="modal-btns">
-      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
-      <button id="modal-confirm-btn" class="btn-confirm">Confirm</button>
+<div class="modal-overlay" id="nukeModal">
+  <div class="modal">
+    <h2>🔥 Nuke Device</h2>
+    <div id="nukeStep1">
+      <div class="step-label">Step 1 of 3 — Enter nuke passphrase</div>
+      <input type="password" id="nukePassphrase" placeholder="Nuke passphrase" />
+      <button class="btn btn-danger" onclick="nukeStep(1)">Next →</button>
     </div>
+    <div id="nukeStep2" style="display:none">
+      <div class="step-label">Step 2 of 3 — Type <strong>NUKE</strong> to confirm</div>
+      <input type="text" id="nukeConfirm" placeholder="Type: NUKE" />
+      <button class="btn btn-danger" onclick="nukeStep(2)">Next →</button>
+    </div>
+    <div id="nukeStep3" style="display:none">
+      <div class="step-label">Step 3 of 3 — Enter TOTP code</div>
+      <input type="text" id="nukeTotp" placeholder="6-digit TOTP" maxlength="6" />
+      <button class="btn btn-danger" onclick="nukeStep(3)">🔥 ARM NUKE</button>
+    </div>
+    <div class="err" id="nukeErr"></div>
+    <button class="btn btn-muted" style="margin-top:12px;width:100%" onclick="closeNukeModal()">Cancel</button>
   </div>
 </div>
+
+<h1>🛡️ Guardian Dashboard <span class="version-badge">v2.0</span></h1>
+<div class="grid" id="deviceGrid"><div class="card" style="color:var(--muted)">Loading…</div></div>
+<div id="toast"></div>
 
 <script>
-let token = null, ws = null, devices = {}, selectedDevice = null, map = null, markers = {};
-let relayBase = '';
+const API="";
+let authToken="", nukeTargetDevice="", nukeCountdowns={};
 
-function doLogin() {
-  const addr = document.getElementById('relay-addr').value.trim();
-  const pass  = document.getElementById('login-pass').value;
-  relayBase = 'http://' + addr;
-  fetch(relayBase + '/auth/login', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({password: pass})
-  }).then(r => r.ok ? r.json() : Promise.reject(r))
-  .then(data => {
-    token = data.token;
-    document.getElementById('login-screen').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-    initMap();
-    connectWS();
-    loadLog();
-  }).catch(() => {
-    const el = document.getElementById('login-err');
-    el.style.display = 'block';
-    el.textContent = 'Login failed. Check password and relay address.';
-  });
+async function doLogin(){
+  const pass=document.getElementById("authPassword").value;
+  const totp=document.getElementById("authTotp").value;
+  if(!pass||!totp){document.getElementById("authErr").textContent="Fill all fields";return;}
+  authToken=`${pass}:${totp}`;
+  const res=await apiFetch("/devices");
+  if(res.ok){document.getElementById("authOverlay").style.display="none";startDashboard();}
+  else{document.getElementById("authErr").textContent="Invalid credentials";authToken="";}
+}
+document.addEventListener("keydown",e=>{if(e.key==="Enter"&&document.getElementById("authOverlay").style.display!=="none")doLogin();});
+
+async function apiFetch(path,method="GET",body=null){
+  const opts={method,headers:{"Authorization":`Bearer ${authToken}`,"Content-Type":"application/json"}};
+  if(body)opts.body=JSON.stringify(body);
+  return fetch(API+path,opts);
+}
+async function sendCommand(deviceId,command,params={}){
+  const res=await apiFetch("/command","POST",{device_id:deviceId,command,params});
+  const data=await res.json();
+  toast(res.ok?`✅ ${command} sent to ${deviceId}`:`❌ ${data.detail}`,res.ok?"ok":"err");
 }
 
-function doLogout() {
-  token = null; if (ws) ws.close();
-  document.getElementById('app').style.display = 'none';
-  document.getElementById('login-screen').style.display = 'flex';
+function startDashboard(){loadDevices();setInterval(loadDevices,10000);}
+async function loadDevices(){
+  const res=await apiFetch("/devices");
+  if(!res.ok)return;
+  const{devices}=await res.json();
+  renderDevices(devices);
+  devices.forEach(d=>checkNukeStatus(d.device_id));
 }
 
-function initMap() {
-  if (map) return;
-  map = L.map('map', {zoomControl: true}).setView([25, 45], 5);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors', maxZoom: 18
-  }).addTo(map);
+function renderDevices(devices){
+  const grid=document.getElementById("deviceGrid");
+  if(!devices.length){grid.innerHTML='<div class="card" style="color:var(--muted)">No devices.</div>';return;}
+  grid.innerHTML=devices.map(d=>deviceCard(d)).join("");
 }
-
-function connectWS() {
-  const wsUrl = 'ws://' + document.getElementById('relay-addr').value.trim() + '/ws';
-  ws = new WebSocket(wsUrl, [], {headers: {authorization: 'Bearer ' + token}});
-  ws.onopen = () => setConnStatus(true);
-  ws.onclose = () => { setConnStatus(false); setTimeout(connectWS, 5000); };
-  ws.onmessage = e => {
-    const msg = JSON.parse(e.data);
-    if (msg.event === 'init' || msg.event === 'device_update') {
-      devices = msg.devices || {};
-      renderDevices();
-      updateMarkers();
+function deviceCard(d){
+  const now=Date.now();
+  const lastSeen=d.last_seen?new Date(d.last_seen):null;
+  const online=lastSeen&&(now-lastSeen.getTime())<120000;
+  const lastSeenStr=lastSeen?lastSeen.toLocaleTimeString():"never";
+  const nukeActive=nukeCountdowns[d.device_id]?.active;
+  return `<div class="card" id="card-${d.device_id}">
+    <div class="device-header">
+      <span class="device-name">${d.device_id}</span>
+      <span class="badge ${online?"badge-online":"badge-offline'}">${online?"ONLINE":"OFFLINE"}</span>
+    </div>
+    <div class="info-row"><span>Platform</span><span>${d.platform||"—"}</span></div>
+    <div class="info-row"><span>OS</span><span>${d.os_version||"—"}</span></div>
+    <div class="info-row"><span>Hostname</span><span>${d.hostname||"—"}</span></div>
+    <div class="info-row"><span>Last seen</span><span>${lastSeenStr}</span></div>
+    <div class="info-row"><span>Agent</span><span>${d.agent_version||"—"}</span></div>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="sendCommand('${d.device_id}','ping')">Ping</button>
+      <button class="btn btn-muted"   onclick="sendCommand('${d.device_id}','location')">📍 Locate</button>
+      <button class="btn btn-warn"    onclick="sendCommand('${d.device_id}','lock')">🔒 Lock</button>
+      <button class="btn btn-danger"  onclick="openNukeModal('${d.device_id}')">🔥 Nuke</button>
+    </div>
+    ${nukeActive?nukePanel(d.device_id):""}
+  </div>`;
+}
+function nukePanel(deviceId){
+  const cd=nukeCountdowns[deviceId];
+  if(!cd||!cd.active)return"";
+  const pct=Math.round((cd.remaining/cd.total)*100);
+  const m=Math.floor(cd.remaining/60),s=cd.remaining%60;
+  return `<div class="nuke-panel"><h2>🔥 WIPE ARMED</h2>
+    <div class="countdown">${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}</div>
+    <div class="countdown-bar"><div class="countdown-fill" style="width:${pct}%"></div></div>
+    <button class="btn btn-ok" style="width:100%" onclick="abortNuke('${deviceId}')">🛑 ABORT WIPE</button>
+  </div>`;
+}
+async function checkNukeStatus(deviceId){
+  const res=await apiFetch(`/nuke/status/${deviceId}`);
+  if(!res.ok)return;
+  const data=await res.json();
+  if(data.active&&!data.aborted&&!data.executed){
+    nukeCountdowns[deviceId]={active:true,remaining:data.remaining_seconds,total:data.countdown_seconds};
+    startCountdownTick(deviceId);
+  }else{nukeCountdowns[deviceId]={active:false};}
+}
+function startCountdownTick(deviceId){
+  if(nukeCountdowns[deviceId]?.tickRunning)return;
+  nukeCountdowns[deviceId].tickRunning=true;
+  const tick=setInterval(()=>{
+    const cd=nukeCountdowns[deviceId];
+    if(!cd||!cd.active||cd.remaining<=0){clearInterval(tick);return;}
+    cd.remaining--;
+    const card=document.getElementById(`card-${deviceId}`);
+    if(card){
+      const fill=card.querySelector(".countdown-fill");
+      const disp=card.querySelector(".countdown");
+      if(fill)fill.style.width=Math.round((cd.remaining/cd.total)*100)+"%";
+      if(disp){const m=Math.floor(cd.remaining/60),s=cd.remaining%60;disp.textContent=`${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;}
     }
-  };
+  },1000);
 }
-
-function setConnStatus(online) {
-  const el = document.getElementById('conn-status');
-  el.className = 'conn-status ' + (online ? 'conn-online' : 'conn-offline');
-  el.textContent = online ? '● Connected' : '● Disconnected';
+function openNukeModal(deviceId){
+  nukeTargetDevice=deviceId;
+  ["nukeStep1","nukeStep2","nukeStep3"].forEach((id,i)=>document.getElementById(id).style.display=i===0?"block":"none");
+  document.getElementById("nukeErr").textContent="";
+  document.getElementById("nukeModal").classList.add("open");
 }
-
-function renderDevices() {
-  const el = document.getElementById('device-list');
-  const devs = Object.values(devices);
-  if (!devs.length) { el.innerHTML = '<div class="no-device">No devices online</div>'; return; }
-  el.innerHTML = devs.map(d => {
-    const icon = d.type === 'android' ? '📱' : '💻';
-    const online = d.status === 'online';
-    const loc = d.location ? `${d.location.lat?.toFixed(4)}, ${d.location.lon?.toFixed(4)}` : 'Unknown';
-    const bat = d.battery != null ? d.battery + '%' : '—';
-    const sel = selectedDevice === d.device_id ? 'selected' : '';
-    return `<div class="device-card ${sel}" onclick="selectDevice('${d.device_id}')">
-      <div class="device-header">
-        <span class="device-icon">${icon}</span>
-        <div><div class="device-name">${d.name}</div><div class="device-id">${d.device_id}</div></div>
-        <span class="status-dot ${online ? 'status-online' : 'status-offline'}"></span>
-      </div>
-      <div class="device-meta">
-        <span class="meta-item">Battery</span><span class="meta-val">${bat}</span>
-        <span class="meta-item">Location</span><span class="meta-val" style="word-break:break-all">${loc}</span>
-        <span class="meta-item">WG IP</span><span class="meta-val">${d.ip || '—'}</span>
-        <span class="meta-item">Status</span><span class="meta-val" style="color:${online?'#4ade80':'#6b7280'}">${d.status}</span>
-      </div>
-    </div>`;
-  }).join('');
+function closeNukeModal(){document.getElementById("nukeModal").classList.remove("open");nukeTargetDevice="";}
+async function nukeStep(step){
+  let value;
+  if(step===1)value=document.getElementById("nukePassphrase").value;
+  if(step===2)value=document.getElementById("nukeConfirm").value;
+  if(step===3)value=document.getElementById("nukeTotp").value;
+  const res=await apiFetch("/nuke/init","POST",{device_id:nukeTargetDevice,step,value});
+  const data=await res.json();
+  if(!res.ok){document.getElementById("nukeErr").textContent=data.detail||"Error";return;}
+  document.getElementById("nukeErr").textContent="";
+  if(step<3){document.getElementById(`nukeStep${step}`).style.display="none";document.getElementById(`nukeStep${step+1}`).style.display="block";}
+  else{closeNukeModal();toast(`🔥 NUKE ARMED for ${nukeTargetDevice} — 10 min countdown`,"warn");checkNukeStatus(nukeTargetDevice);}
 }
-
-function selectDevice(id) {
-  selectedDevice = id;
-  renderDevices();
-  const panel = document.getElementById('cmd-panel');
-  panel.style.display = 'block';
-  document.getElementById('cmd-device-name').textContent = devices[id]?.name || id;
-  const d = devices[id];
-  if (d?.location?.lat && map) map.setView([d.location.lat, d.location.lon], 13);
+async function abortNuke(deviceId){
+  if(!confirm(`Abort wipe for ${deviceId}?`))return;
+  const res=await apiFetch("/nuke/abort","POST",{device_id:deviceId});
+  const data=await res.json();
+  if(res.ok){toast(`✅ Aborted for ${deviceId}`,"ok");nukeCountdowns[deviceId]={active:false};loadDevices();}
+  else toast(`❌ ${data.detail}`,"err");
 }
-
-function updateMarkers() {
-  Object.values(devices).forEach(d => {
-    if (!d.location?.lat) return;
-    const pos = [d.location.lat, d.location.lon];
-    if (markers[d.device_id]) {
-      markers[d.device_id].setLatLng(pos);
-    } else {
-      const icon = d.type === 'android' ? '📱' : '💻';
-      markers[d.device_id] = L.marker(pos, {
-        icon: L.divIcon({html: `<div style="font-size:24px">${icon}</div>`, iconSize:[30,30], iconAnchor:[15,15]})
-      }).addTo(map).bindPopup(`<b>${d.name}</b><br>${d.device_id}`);
-    }
-  });
+function toast(msg,type="ok"){
+  const el=document.getElementById("toast");
+  el.textContent=msg;
+  el.style.borderColor=type==="ok"?"var(--ok)":type==="warn"?"var(--warn)":"var(--danger)";
+  el.classList.add("show");
+  setTimeout(()=>el.classList.remove("show"),3500);
 }
-
-function apiCmd(endpoint, body) {
-  return fetch(relayBase + endpoint, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json', 'Authorization':'Bearer '+token},
-    body: JSON.stringify({device_id: selectedDevice, ...body})
-  }).then(r => r.json());
-}
-
-function cmdLocate() {
-  if (!selectedDevice) return;
-  apiCmd('/cmd/locate', {}).then(() => addLog('locate', selectedDevice));
-}
-
-let pendingAction = null;
-function openModal(title, desc, action, confirmClass='btn-confirm') {
-  document.getElementById('modal-title').textContent = title;
-  document.getElementById('modal-desc').textContent = desc;
-  document.getElementById('modal-phrase').style.display = 'block';
-  document.getElementById('modal-totp').style.display = 'block';
-  document.getElementById('modal-phrase').value = '';
-  document.getElementById('modal-totp').value = '';
-  document.getElementById('modal-confirm-btn').className = confirmClass;
-  document.getElementById('modal-overlay').style.display = 'flex';
-  pendingAction = action;
-}
-function closeModal() {
-  document.getElementById('modal-overlay').style.display = 'none';
-  pendingAction = null;
-}
-document.getElementById('modal-confirm-btn').onclick = () => {
-  if (pendingAction) pendingAction();
-};
-
-function cmdLock() {
-  if (!selectedDevice) return;
-  openModal('🔒 Lock Device',
-    'Type: CONFIRM-DEVICE-LOCK\nThen enter your TOTP code.',
-    () => {
-      const phrase = document.getElementById('modal-phrase').value;
-      const totp   = document.getElementById('modal-totp').value;
-      apiCmd('/cmd/lock', {phrase, totp, timestamp: Date.now()/1000, nonce: Math.random().toString(36).slice(2)})
-      .then(r => { closeModal(); addLog('lock', selectedDevice, JSON.stringify(r)); })
-      .catch(e => alert('Failed: ' + JSON.stringify(e)));
-    }, 'btn-confirm-safe');
-}
-
-function cmdBackup() {
-  if (!selectedDevice) return;
-  openModal('💾 Backup Files',
-    'Type: CONFIRM-BACKUP-NOW\nThen enter your TOTP code.',
-    () => {
-      const phrase = document.getElementById('modal-phrase').value;
-      const totp   = document.getElementById('modal-totp').value;
-      apiCmd('/cmd/backup', {phrase, totp, timestamp: Date.now()/1000, nonce: Math.random().toString(36).slice(2)})
-      .then(r => { closeModal(); addLog('backup', selectedDevice, JSON.stringify(r)); })
-      .catch(e => alert('Failed: ' + JSON.stringify(e)));
-    }, 'btn-confirm-safe');
-}
-
-function cmdWipe() {
-  if (!selectedDevice) return;
-  openModal('⚠️ REMOTE WIPE — IRREVERSIBLE',
-    'ALL DATA WILL BE DELETED. This cannot be undone.\n\nType: CONFIRM-WIPE-ALL-DATA\nThen enter your TOTP code.',
-    () => {
-      const phrase = document.getElementById('modal-phrase').value;
-      const totp   = document.getElementById('modal-totp').value;
-      apiCmd('/cmd/wipe', {phrase, totp, timestamp: Date.now()/1000, nonce: Math.random().toString(36).slice(2), backup_confirmed: true})
-      .then(r => { closeModal(); addLog('wipe', selectedDevice, JSON.stringify(r)); })
-      .catch(e => alert('Failed: ' + JSON.stringify(e)));
-    });
-}
-
-function loadLog() {
-  fetch(relayBase + '/log', {headers: {'Authorization':'Bearer '+token}})
-  .then(r => r.json()).then(log => {
-    const el = document.getElementById('log-list');
-    el.innerHTML = log.slice(-20).reverse().map(e =>
-      `<div class="log-entry">${new Date(e.timestamp*1000).toLocaleTimeString()} [${e.device_id}] ${e.action}</div>`
-    ).join('');
-  });
-}
-
-function addLog(action, deviceId, detail='') {
-  const el = document.getElementById('log-list');
-  const entry = document.createElement('div');
-  entry.className = 'log-entry';
-  entry.textContent = `${new Date().toLocaleTimeString()} [${deviceId}] ${action}`;
-  el.prepend(entry);
-}
-
-document.getElementById('login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-setInterval(loadLog, 30000);
 </script>
 </body>
 </html>
