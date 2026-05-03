@@ -1,0 +1,92 @@
+name: Build Guardian Agents
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:  # allow manual trigger from GitHub UI
+
+jobs:
+
+  # ─── WINDOWS .EXE ────────────────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows Agent (.exe)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install paho-mqtt pyinstaller
+
+      - name: Build .exe
+        working-directory: windows-agent
+        run: |
+          pyinstaller `
+            --onefile `
+            --noconsole `
+            --name guardian_windows_agent `
+            guardian_windows_agent.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardian-windows
+          path: windows-agent/dist/guardian_windows_agent.exe
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: windows-agent/dist/guardian_windows_agent.exe
+
+  # ─── MAC BINARY ──────────────────────────────────────────────────────────────
+  build-mac:
+    name: Build Mac Agent (binary)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install paho-mqtt pyinstaller
+
+      - name: Build binary
+        working-directory: mac-agent
+        run: |
+          pyinstaller \
+            --onefile \
+            --name guardian_mac_agent \
+            guardian_mac_agent.py
+
+      - name: Zip binary + installer
+        working-directory: mac-agent
+        run: |
+          cp install_mac.sh dist/install_mac.sh
+          cd dist
+          zip -r guardian-mac-agent.zip guardian_mac_agent install_mac.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardian-mac
+          path: mac-agent/dist/guardian-mac-agent.zip
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: mac-agent/dist/guardian-mac-agent.zip
