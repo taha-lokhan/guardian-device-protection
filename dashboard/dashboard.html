@@ -401,8 +401,8 @@ body::after{
   overflow:hidden;
 }
 @keyframes authIn{
-  from{opacity:0;transform:scale(.8)translateY(20px)}
-  to{opacity:1;transform:scale(1)translateY(0)}
+  from{opacity:0;transform:scale(.8) translateY(20px)}
+  to{opacity:1;transform:scale(1) translateY(0)}
 }
 .auth-box::before{
   content:'';
@@ -892,6 +892,7 @@ function platformIcon(p){
   return "💻";
 }
 
+// FIX: use data-id attribute + event delegation to avoid quote injection in onclick
 function deviceCard(d,idx){
   const online=isOnline(d);
   const lastSeen=d.last_seen?new Date(d.last_seen):null;
@@ -899,13 +900,14 @@ function deviceCard(d,idx){
   const armed=nukeCountdowns[d.device_id]?.active;
   const icon=platformIcon(d.platform);
   const animDelay=idx*0.08;
-  return `<div class="device-card${armed?" armed":""}" id="card-${d.device_id}" style="animation-delay:${animDelay}s">
+  const eid=encodeURIComponent(d.device_id);
+  return `<div class="device-card${armed?" armed":""}" id="card-${eid}" data-id="${eid}" style="animation-delay:${animDelay}s">
     <div class="card-top">
       <div class="device-identity">
         <div class="device-name">${icon} ${d.device_id}</div>
         <div class="device-id">${d.hostname||"UNKNOWN HOST"} &bull; ${d.platform||"UNKNOWN"}</div>
       </div>
-      <div class="status-badge ${online?"online":"offline'}">
+      <div class="status-badge ${online?"online":"offline"}">
         <div class="status-dot"></div>
         ${online?"ONLINE":"OFFLINE"}
       </div>
@@ -917,14 +919,34 @@ function deviceCard(d,idx){
       <div class="info-row"><span class="info-key">IP_ADDR</span><span class="info-val accent">${d.ip||"—"}</span></div>
     </div>
     <div class="actions">
-      <button class="btn btn-ping" onclick="sendCommand('${d.device_id}','ping')">▶ PING</button>
-      <button class="btn btn-locate" onclick="sendCommand('${d.device_id}','location')">◎ LOCATE</button>
-      <button class="btn btn-lock" onclick="sendCommand('${d.device_id}','lock')">⊘ LOCK</button>
-      <button class="btn btn-nuke" onclick="openNukeModal('${d.device_id}')">⚠ NUKE</button>
+      <button class="btn btn-ping"    data-cmd="ping"     data-id="${eid}">▶ PING</button>
+      <button class="btn btn-locate"  data-cmd="location" data-id="${eid}">◎ LOCATE</button>
+      <button class="btn btn-lock"    data-cmd="lock"     data-id="${eid}">⊘ LOCK</button>
+      <button class="btn btn-nuke"    data-nuke="${eid}">⚠ NUKE</button>
     </div>
     ${armed?nukePanel(d.device_id):""}
   </div>`;
 }
+
+// EVENT DELEGATION — replaces all inline onclick on cards
+document.addEventListener("click",function(e){
+  const cmdBtn=e.target.closest("[data-cmd]");
+  if(cmdBtn){
+    const id=decodeURIComponent(cmdBtn.dataset.id);
+    sendCommand(id,cmdBtn.dataset.cmd);
+    return;
+  }
+  const nukeBtn=e.target.closest("[data-nuke]");
+  if(nukeBtn){
+    openNukeModal(decodeURIComponent(nukeBtn.dataset.nuke));
+    return;
+  }
+  const abortBtn=e.target.closest("[data-abort]");
+  if(abortBtn){
+    abortNuke(decodeURIComponent(abortBtn.dataset.abort));
+    return;
+  }
+});
 
 function nukePanel(deviceId){
   const cd=nukeCountdowns[deviceId];
@@ -932,15 +954,16 @@ function nukePanel(deviceId){
   const pct=Math.round((cd.remaining/cd.total)*100);
   const m=Math.floor(cd.remaining/60),s=cd.remaining%60;
   const fillClass=pct>50?"fill-danger":pct>20?"fill-warn":"fill-danger";
+  const eid=encodeURIComponent(deviceId);
   return `<div class="nuke-arm-panel">
     <div class="nuke-timer-label">◉ WIPE COUNTDOWN ACTIVE</div>
-    <div class="nuke-countdown" id="nkd-${deviceId}">${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}</div>
+    <div class="nuke-countdown" id="nkd-${eid}">${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}</div>
     <div class="progress-wrap">
-      <div class="progress-label"><span>EXECUTION</span><span id="nkp-${deviceId}">${pct}%</span></div>
-      <div class="progress-track"><div class="progress-fill ${fillClass}" id="nkf-${deviceId}" style="width:${100-pct}%"></div></div>
+      <div class="progress-label"><span>EXECUTION</span><span id="nkp-${eid}">${pct}%</span></div>
+      <div class="progress-track"><div class="progress-fill ${fillClass}" id="nkf-${eid}" style="width:${100-pct}%"></div></div>
     </div>
     <div class="nuke-actions">
-      <button class="btn btn-abort" style="flex:1" onclick="abortNuke('${deviceId}')">◼ ABORT WIPE</button>
+      <button class="btn btn-abort" style="flex:1" data-abort="${eid}">◼ ABORT WIPE</button>
     </div>
   </div>`;
 }
@@ -1018,14 +1041,15 @@ async function checkNukeStatus(deviceId){
 function startCountdownTick(deviceId){
   if(nukeCountdowns[deviceId]?.tickRunning)return;
   nukeCountdowns[deviceId].tickRunning=true;
+  const eid=encodeURIComponent(deviceId);
   const tick=setInterval(()=>{
     const cd=nukeCountdowns[deviceId];
     if(!cd||!cd.active||cd.remaining<=0){clearInterval(tick);return;}
     cd.remaining--;
     const m=Math.floor(cd.remaining/60),s=cd.remaining%60;
-    const disp=document.getElementById(`nkd-${deviceId}`);
-    const fill=document.getElementById(`nkf-${deviceId}`);
-    const pctEl=document.getElementById(`nkp-${deviceId}`);
+    const disp=document.getElementById(`nkd-${eid}`);
+    const fill=document.getElementById(`nkf-${eid}`);
+    const pctEl=document.getElementById(`nkp-${eid}`);
     if(disp)disp.textContent=`${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
     const pct=Math.round((cd.remaining/cd.total)*100);
     if(fill)fill.style.width=(100-pct)+"%";
