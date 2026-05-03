@@ -26,12 +26,9 @@
   --glow-ok:0 0 15px rgba(0,255,136,0.4);
 }
 *{box-sizing:border-box;margin:0;padding:0}
-
-/* SCROLLBAR */
 ::-webkit-scrollbar{width:4px}
 ::-webkit-scrollbar-track{background:var(--bg)}
 ::-webkit-scrollbar-thumb{background:var(--accent);border-radius:2px}
-
 body{
   background:var(--bg);
   color:var(--text);
@@ -39,82 +36,49 @@ body{
   min-height:100vh;
   overflow-x:hidden;
 }
-
-/* SCANLINES */
 body::before{
   content:'';
-  position:fixed;
-  inset:0;
+  position:fixed;inset:0;
   background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.08) 2px,rgba(0,0,0,0.08) 4px);
-  pointer-events:none;
-  z-index:9998;
+  pointer-events:none;z-index:9998;
   animation:scanMove 8s linear infinite;
 }
 @keyframes scanMove{0%{background-position:0 0}100%{background-position:0 100%}}
-
-/* NOISE OVERLAY */
 body::after{
   content:'';
-  position:fixed;
-  inset:0;
-  opacity:.025;
+  position:fixed;inset:0;opacity:.025;
   background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  pointer-events:none;
-  z-index:9997;
+  pointer-events:none;z-index:9997;
 }
-
-/* GRID BACKGROUND */
 .grid-bg{
-  position:fixed;
-  inset:0;
-  background-image:
-    linear-gradient(rgba(0,200,255,0.03) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(0,200,255,0.03) 1px,transparent 1px);
+  position:fixed;inset:0;
+  background-image:linear-gradient(rgba(0,200,255,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,200,255,0.03) 1px,transparent 1px);
   background-size:40px 40px;
-  pointer-events:none;
-  z-index:0;
+  pointer-events:none;z-index:0;
   animation:gridPulse 4s ease-in-out infinite;
 }
 @keyframes gridPulse{0%,100%{opacity:1}50%{opacity:.5}}
-
-/* CORNER BRACKETS */
-.corner{
-  position:fixed;
-  width:40px;height:40px;
-  z-index:9990;
-  opacity:.4;
-}
+.corner{position:fixed;width:40px;height:40px;z-index:9990;opacity:.4;}
 .corner-tl{top:12px;left:12px;border-top:2px solid var(--accent);border-left:2px solid var(--accent)}
 .corner-tr{top:12px;right:12px;border-top:2px solid var(--accent);border-right:2px solid var(--accent)}
 .corner-bl{bottom:12px;left:12px;border-bottom:2px solid var(--accent);border-left:2px solid var(--accent)}
 .corner-br{bottom:12px;right:12px;border-bottom:2px solid var(--accent);border-right:2px solid var(--accent)}
-
-/* HEADER */
 .header{
-  position:relative;
-  z-index:10;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
+  position:relative;z-index:10;
+  display:flex;align-items:center;justify-content:space-between;
   padding:20px 32px;
   border-bottom:1px solid var(--border);
   background:linear-gradient(180deg,rgba(0,200,255,0.04) 0%,transparent 100%);
   backdrop-filter:blur(20px);
 }
-.logo{
-  display:flex;
-  align-items:center;
-  gap:16px;
-}
+.logo{display:flex;align-items:center;gap:16px;}
 .logo-icon{
-  width:42px;height:42px;
-  background:var(--accent);
+  width:42px;height:42px;background:var(--accent);
   clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
   display:flex;align-items:center;justify-content:center;
   font-size:1.1rem;
   animation:hexPulse 3s ease-in-out infinite;
-  box-shadow:var(--glow-accent);
-  flex-shrink:0;
+  box-shadow:var(--glow-accent);flex-shrink:0;
 }
 @keyframes hexPulse{
   0%,100%{box-shadow:0 0 20px rgba(0,200,255,0.4),0 0 40px rgba(0,200,255,0.15)}
@@ -123,48 +87,20 @@ body::after{
 .logo-text{font-family:'Orbitron',sans-serif;font-size:1.25rem;font-weight:900;letter-spacing:.15em;color:#fff;text-shadow:0 0 20px rgba(0,200,255,0.5)}
 .logo-sub{font-size:.65rem;color:var(--muted);letter-spacing:.2em;text-transform:uppercase}
 .header-right{display:flex;align-items:center;gap:20px}
-.sys-stat{
-  display:flex;flex-direction:column;align-items:flex-end;
-  font-size:.65rem;color:var(--muted);letter-spacing:.1em;
-}
+.sys-stat{display:flex;flex-direction:column;align-items:flex-end;font-size:.65rem;color:var(--muted);letter-spacing:.1em;}
 .sys-stat span:first-child{font-size:.8rem;color:var(--accent);font-weight:700}
-.live-dot{
-  width:8px;height:8px;border-radius:50%;background:var(--ok);
-  box-shadow:var(--glow-ok);
-  animation:liveBlink 1.2s ease-in-out infinite;
-}
+.live-dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:var(--glow-ok);animation:liveBlink 1.2s ease-in-out infinite;}
 @keyframes liveBlink{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.7)}}
 .header-time{font-family:'Orbitron',sans-serif;font-size:.9rem;color:var(--accent);letter-spacing:.1em}
-
-/* CONTENT */
-.content{
-  position:relative;
-  z-index:10;
-  padding:24px 32px;
-}
-
-/* STATS BAR */
-.stats-bar{
-  display:grid;
-  grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
-  gap:12px;
-  margin-bottom:24px;
-}
+.content{position:relative;z-index:10;padding:24px 32px;}
+.stats-bar{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:24px;}
 .stat-tile{
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:8px;
-  padding:16px 20px;
-  position:relative;
-  overflow:hidden;
-  cursor:default;
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  padding:16px 20px;position:relative;overflow:hidden;cursor:default;
   transition:border-color .3s,transform .2s;
 }
 .stat-tile::before{
-  content:'';
-  position:absolute;
-  top:0;left:0;right:0;
-  height:2px;
+  content:'';position:absolute;top:0;left:0;right:0;height:2px;
   background:linear-gradient(90deg,transparent,var(--accent),transparent);
   animation:scanTop 3s linear infinite;
 }
@@ -176,48 +112,22 @@ body::after{
 .stat-tile.ok .tile-value{color:var(--ok);text-shadow:var(--glow-ok)}
 .stat-tile.warn .tile-value{color:var(--warn)}
 .stat-tile.danger .tile-value{color:var(--danger);text-shadow:var(--glow-danger)}
-
-/* SECTION LABEL */
 .section-label{
-  font-family:'Orbitron',sans-serif;
-  font-size:.7rem;
-  letter-spacing:.25em;
-  color:var(--muted);
-  text-transform:uppercase;
-  margin-bottom:14px;
-  display:flex;
-  align-items:center;
-  gap:12px;
+  font-family:'Orbitron',sans-serif;font-size:.7rem;letter-spacing:.25em;
+  color:var(--muted);text-transform:uppercase;margin-bottom:14px;
+  display:flex;align-items:center;gap:12px;
 }
 .section-label::after{content:'';flex:1;height:1px;background:linear-gradient(90deg,var(--border),transparent)}
-
-/* DEVICE GRID */
-.device-grid{
-  display:grid;
-  grid-template-columns:repeat(auto-fill,minmax(340px,1fr));
-  gap:16px;
-}
-
-/* DEVICE CARD */
+.device-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;}
 .device-card{
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:12px;
-  padding:22px;
-  position:relative;
-  overflow:hidden;
-  backdrop-filter:blur(20px);
+  background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  padding:22px;position:relative;overflow:hidden;backdrop-filter:blur(20px);
   transition:border-color .3s,box-shadow .3s,transform .2s;
   animation:cardIn .4s ease both;
 }
-@keyframes cardIn{
-  from{opacity:0;transform:translateY(20px)}
-  to{opacity:1;transform:translateY(0)}
-}
+@keyframes cardIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
 .device-card::before{
-  content:'';
-  position:absolute;
-  inset:0;
+  content:'';position:absolute;inset:0;
   background:linear-gradient(135deg,rgba(0,200,255,0.03) 0%,transparent 60%);
   pointer-events:none;
 }
@@ -227,75 +137,32 @@ body::after{
   0%,100%{border-color:rgba(255,34,68,0.5);box-shadow:0 0 20px rgba(255,34,68,0.3)}
   50%{border-color:rgba(255,34,68,0.9);box-shadow:0 0 60px rgba(255,34,68,0.5),0 0 120px rgba(255,34,68,0.2)}
 }
-
-/* CARD TOP ROW */
 .card-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px}
-.device-identity{}
 .device-name{font-family:'Orbitron',sans-serif;font-size:.95rem;font-weight:700;color:#fff;letter-spacing:.05em;margin-bottom:4px}
 .device-id{font-size:.62rem;color:var(--muted);letter-spacing:.1em}
-.status-badge{
-  display:flex;align-items:center;gap:6px;
-  padding:4px 10px;
-  border-radius:20px;
-  font-size:.65rem;
-  font-weight:700;
-  letter-spacing:.1em;
-}
+.status-badge{display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:20px;font-size:.65rem;font-weight:700;letter-spacing:.1em;}
 .status-badge.online{background:rgba(0,255,136,0.1);border:1px solid rgba(0,255,136,0.3);color:var(--ok)}
 .status-badge.offline{background:rgba(255,34,68,0.1);border:1px solid rgba(255,34,68,0.2);color:var(--danger)}
 .status-dot{width:6px;height:6px;border-radius:50%;}
 .online .status-dot{background:var(--ok);box-shadow:var(--glow-ok);animation:liveBlink 1.2s infinite}
 .offline .status-dot{background:var(--danger)}
-
-/* INFO TABLE */
 .info-table{margin-bottom:16px}
-.info-row{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  padding:5px 0;
-  border-bottom:1px solid rgba(0,200,255,0.05);
-  font-size:.75rem;
-}
+.info-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(0,200,255,0.05);font-size:.75rem;}
 .info-row:last-child{border-bottom:none}
 .info-key{color:var(--muted);letter-spacing:.08em}
 .info-val{color:var(--text);text-align:right}
 .info-val.accent{color:var(--accent)}
-
-/* PLATFORM BADGE */
-.platform-icon{font-size:.85rem;margin-right:4px}
-
-/* ACTION BUTTONS */
 .actions{display:flex;gap:8px;flex-wrap:wrap}
 .btn{
-  position:relative;
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  padding:7px 14px;
-  border-radius:6px;
-  border:1px solid transparent;
-  cursor:pointer;
-  font-family:'JetBrains Mono',monospace;
-  font-size:.72rem;
-  font-weight:700;
-  letter-spacing:.06em;
-  text-transform:uppercase;
-  transition:all .2s;
-  overflow:hidden;
-  background:transparent;
+  position:relative;display:inline-flex;align-items:center;gap:6px;
+  padding:7px 14px;border-radius:6px;border:1px solid transparent;
+  cursor:pointer;font-family:'JetBrains Mono',monospace;
+  font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  transition:all .2s;overflow:hidden;background:transparent;
 }
-.btn::before{
-  content:'';
-  position:absolute;
-  inset:0;
-  opacity:0;
-  background:linear-gradient(135deg,rgba(255,255,255,0.1),transparent);
-  transition:opacity .2s;
-}
+.btn::before{content:'';position:absolute;inset:0;opacity:0;background:linear-gradient(135deg,rgba(255,255,255,0.1),transparent);transition:opacity .2s;}
 .btn:hover::before{opacity:1}
 .btn:active{transform:scale(.96)}
-
 .btn-ping{border-color:rgba(0,200,255,0.3);color:var(--accent);background:rgba(0,200,255,0.07)}
 .btn-ping:hover{border-color:var(--accent);box-shadow:0 0 15px rgba(0,200,255,0.2)}
 .btn-locate{border-color:rgba(0,255,136,0.3);color:var(--ok);background:rgba(0,255,136,0.07)}
@@ -310,284 +177,72 @@ body::after{
 .btn-proceed:hover{box-shadow:var(--glow-danger)}
 .btn-cancel{border-color:var(--border);color:var(--muted);background:transparent}
 .btn-cancel:hover{border-color:var(--muted)}
-
-/* PROGRESS BAR */
 .progress-wrap{margin-bottom:6px}
-.progress-label{
-  display:flex;justify-content:space-between;
-  font-size:.6rem;color:var(--muted);
-  margin-bottom:4px;
-  letter-spacing:.08em;
-}
-.progress-track{
-  height:3px;background:rgba(255,255,255,0.05);
-  border-radius:2px;overflow:hidden;
-}
-.progress-fill{
-  height:100%;border-radius:2px;
-  transition:width 1s linear;
-  position:relative;
-}
-.progress-fill::after{
-  content:'';
-  position:absolute;
-  right:0;top:-1px;width:6px;height:5px;
-  background:inherit;
-  box-shadow:0 0 8px 2px currentColor;
-  border-radius:50%;
-}
+.progress-label{display:flex;justify-content:space-between;font-size:.6rem;color:var(--muted);margin-bottom:4px;letter-spacing:.08em;}
+.progress-track{height:3px;background:rgba(255,255,255,0.05);border-radius:2px;overflow:hidden;}
+.progress-fill{height:100%;border-radius:2px;transition:width 1s linear;position:relative;}
+.progress-fill::after{content:'';position:absolute;right:0;top:-1px;width:6px;height:5px;background:inherit;box-shadow:0 0 8px 2px currentColor;border-radius:50%;}
 .fill-ok{background:var(--ok);color:var(--ok)}
 .fill-warn{background:var(--warn);color:var(--warn)}
 .fill-danger{background:var(--danger);color:var(--danger)}
 .fill-accent{background:var(--accent);color:var(--accent)}
-
-/* NUKE PANEL INSIDE CARD */
 .nuke-arm-panel{
-  margin-top:16px;
-  padding:16px;
-  border-radius:8px;
-  background:rgba(255,34,68,0.05);
-  border:1px solid rgba(255,34,68,0.3);
-  position:relative;
-  overflow:hidden;
+  margin-top:16px;padding:16px;border-radius:8px;
+  background:rgba(255,34,68,0.05);border:1px solid rgba(255,34,68,0.3);
+  position:relative;overflow:hidden;
 }
 .nuke-arm-panel::before{
-  content:'WIPE ARMED';
-  position:absolute;
-  top:50%;left:50%;
+  content:'WIPE ARMED';position:absolute;top:50%;left:50%;
   transform:translate(-50%,-50%);
-  font-family:'Orbitron',sans-serif;
-  font-size:2.5rem;
-  font-weight:900;
-  color:rgba(255,34,68,0.04);
-  letter-spacing:.1em;
-  pointer-events:none;
-  white-space:nowrap;
+  font-family:'Orbitron',sans-serif;font-size:2.5rem;font-weight:900;
+  color:rgba(255,34,68,0.04);letter-spacing:.1em;pointer-events:none;white-space:nowrap;
 }
-.nuke-timer-label{
-  font-size:.6rem;color:var(--danger);letter-spacing:.2em;text-transform:uppercase;margin-bottom:6px;
-  animation:textBlink 1s ease-in-out infinite;
-}
+.nuke-timer-label{font-size:.6rem;color:var(--danger);letter-spacing:.2em;text-transform:uppercase;margin-bottom:6px;animation:textBlink 1s ease-in-out infinite;}
 @keyframes textBlink{0%,100%{opacity:1}50%{opacity:.4}}
-.nuke-countdown{
-  font-family:'Orbitron',sans-serif;
-  font-size:2rem;
-  font-weight:900;
-  color:var(--danger);
-  text-shadow:var(--glow-danger);
-  letter-spacing:.1em;
-  margin-bottom:10px;
-  text-align:center;
-}
+.nuke-countdown{font-family:'Orbitron',sans-serif;font-size:2rem;font-weight:900;color:var(--danger);text-shadow:var(--glow-danger);letter-spacing:.1em;margin-bottom:10px;text-align:center;}
 .nuke-actions{display:flex;gap:8px}
-
-/* AUTH OVERLAY */
-.auth-overlay{
-  position:fixed;inset:0;
-  background:rgba(2,4,8,0.97);
-  display:flex;align-items:center;justify-content:center;
-  z-index:10000;
-  backdrop-filter:blur(8px);
-}
+.auth-overlay{position:fixed;inset:0;background:rgba(2,4,8,0.97);display:flex;align-items:center;justify-content:center;z-index:10000;backdrop-filter:blur(8px);}
 .auth-box{
   width:360px;
   background:linear-gradient(135deg,rgba(10,20,35,0.95),rgba(5,10,20,0.98));
-  border:1px solid var(--border-hot);
-  border-radius:16px;
-  padding:36px;
+  border:1px solid var(--border-hot);border-radius:16px;padding:36px;
   box-shadow:var(--glow-accent),inset 0 1px 0 rgba(0,200,255,0.1);
   animation:authIn .5s cubic-bezier(.175,.885,.32,1.275);
-  position:relative;
-  overflow:hidden;
+  position:relative;overflow:hidden;
 }
-@keyframes authIn{
-  from{opacity:0;transform:scale(.8) translateY(20px)}
-  to{opacity:1;transform:scale(1) translateY(0)}
-}
-.auth-box::before{
-  content:'';
-  position:absolute;
-  top:-2px;left:20%;right:20%;
-  height:2px;
-  background:linear-gradient(90deg,transparent,var(--accent),transparent);
-  animation:scanTop 2s linear infinite;
-}
-.auth-logo{
-  text-align:center;
-  margin-bottom:28px;
-}
-.auth-logo .hex{
-  width:56px;height:56px;
-  background:var(--accent);
-  clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
-  display:inline-flex;align-items:center;justify-content:center;
-  font-size:1.5rem;
-  margin-bottom:12px;
-  animation:hexPulse 2s ease-in-out infinite;
-  box-shadow:var(--glow-accent);
-}
-.auth-title{
-  font-family:'Orbitron',sans-serif;
-  font-size:1rem;
-  font-weight:900;
-  letter-spacing:.2em;
-  color:#fff;
-}
-.auth-subtitle{
-  font-size:.65rem;
-  color:var(--muted);
-  letter-spacing:.15em;
-  margin-top:4px;
-}
-.auth-field{
-  position:relative;
-  margin-bottom:12px;
-}
-.auth-field label{
-  display:block;
-  font-size:.6rem;
-  color:var(--muted);
-  letter-spacing:.15em;
-  text-transform:uppercase;
-  margin-bottom:6px;
-}
-.auth-field input{
-  width:100%;
-  padding:10px 14px;
-  background:rgba(0,0,0,0.4);
-  border:1px solid var(--border);
-  border-radius:6px;
-  color:var(--text);
-  font-family:'JetBrains Mono',monospace;
-  font-size:.85rem;
-  outline:none;
-  transition:border-color .2s,box-shadow .2s;
-}
+@keyframes authIn{from{opacity:0;transform:scale(.8) translateY(20px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.auth-box::before{content:'';position:absolute;top:-2px;left:20%;right:20%;height:2px;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:scanTop 2s linear infinite;}
+.auth-logo{text-align:center;margin-bottom:28px;}
+.auth-logo .hex{width:56px;height:56px;background:var(--accent);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);display:inline-flex;align-items:center;justify-content:center;font-size:1.5rem;margin-bottom:12px;animation:hexPulse 2s ease-in-out infinite;box-shadow:var(--glow-accent);}
+.auth-title{font-family:'Orbitron',sans-serif;font-size:1rem;font-weight:900;letter-spacing:.2em;color:#fff;}
+.auth-subtitle{font-size:.65rem;color:var(--muted);letter-spacing:.15em;margin-top:4px;}
+.auth-field{position:relative;margin-bottom:12px;}
+.auth-field label{display:block;font-size:.6rem;color:var(--muted);letter-spacing:.15em;text-transform:uppercase;margin-bottom:6px;}
+.auth-field input{width:100%;padding:10px 14px;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.85rem;outline:none;transition:border-color .2s,box-shadow .2s;}
 .auth-field input:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,200,255,0.1)}
 .auth-err{color:var(--danger);font-size:.72rem;margin-top:8px;min-height:18px}
-.auth-submit{
-  width:100%;
-  padding:12px;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  border:none;border-radius:8px;
-  color:#000;
-  font-family:'JetBrains Mono',monospace;
-  font-size:.8rem;
-  font-weight:800;
-  letter-spacing:.12em;
-  text-transform:uppercase;
-  cursor:pointer;
-  margin-top:8px;
-  transition:all .2s;
-  box-shadow:0 4px 20px rgba(0,200,255,0.3);
-}
+.auth-submit{width:100%;padding:12px;background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;border-radius:8px;color:#000;font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;margin-top:8px;transition:all .2s;box-shadow:0 4px 20px rgba(0,200,255,0.3);}
 .auth-submit:hover{transform:translateY(-1px);box-shadow:0 6px 30px rgba(0,200,255,0.5)}
 .auth-submit:active{transform:translateY(1px)}
-
-/* MODAL */
-.modal-overlay{
-  position:fixed;inset:0;
-  background:rgba(2,4,8,0.9);
-  display:none;align-items:center;justify-content:center;
-  z-index:5000;
-  backdrop-filter:blur(6px);
-}
+.modal-overlay{position:fixed;inset:0;background:rgba(2,4,8,0.9);display:none;align-items:center;justify-content:center;z-index:5000;backdrop-filter:blur(6px);}
 .modal-overlay.open{display:flex}
-.modal{
-  width:420px;
-  background:linear-gradient(135deg,rgba(20,5,8,0.98),rgba(10,3,5,0.99));
-  border:1px solid rgba(255,34,68,0.3);
-  border-radius:16px;
-  padding:32px;
-  box-shadow:var(--glow-danger);
-  animation:authIn .3s ease;
-  position:relative;
-  overflow:hidden;
-}
-.modal::before{
-  content:'';
-  position:absolute;
-  top:-2px;left:20%;right:20%;
-  height:2px;
-  background:linear-gradient(90deg,transparent,var(--danger),transparent);
-  animation:scanTop 1.5s linear infinite;
-}
-.modal-title{
-  font-family:'Orbitron',sans-serif;
-  font-size:1.1rem;
-  font-weight:900;
-  color:var(--danger);
-  letter-spacing:.1em;
-  margin-bottom:6px;
-  text-shadow:var(--glow-danger);
-}
-.modal-target{
-  font-size:.65rem;color:var(--muted);letter-spacing:.1em;
-  margin-bottom:20px;
-  padding-bottom:16px;
-  border-bottom:1px solid rgba(255,34,68,0.15);
-}
+.modal{width:420px;background:linear-gradient(135deg,rgba(20,5,8,0.98),rgba(10,3,5,0.99));border:1px solid rgba(255,34,68,0.3);border-radius:16px;padding:32px;box-shadow:var(--glow-danger);animation:authIn .3s ease;position:relative;overflow:hidden;}
+.modal::before{content:'';position:absolute;top:-2px;left:20%;right:20%;height:2px;background:linear-gradient(90deg,transparent,var(--danger),transparent);animation:scanTop 1.5s linear infinite;}
+.modal-title{font-family:'Orbitron',sans-serif;font-size:1.1rem;font-weight:900;color:var(--danger);letter-spacing:.1em;margin-bottom:6px;text-shadow:var(--glow-danger);}
+.modal-target{font-size:.65rem;color:var(--muted);letter-spacing:.1em;margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid rgba(255,34,68,0.15);}
 .modal-target span{color:var(--danger)}
-.step-indicator{
-  display:flex;gap:6px;margin-bottom:20px;
-}
-.step-dot{
-  flex:1;height:3px;border-radius:2px;
-  background:rgba(255,34,68,0.15);
-  transition:background .3s;
-}
+.step-indicator{display:flex;gap:6px;margin-bottom:20px;}
+.step-dot{flex:1;height:3px;border-radius:2px;background:rgba(255,34,68,0.15);transition:background .3s;}
 .step-dot.active{background:var(--danger);box-shadow:0 0 8px rgba(255,34,68,0.5)}
 .step-dot.done{background:rgba(255,34,68,0.4)}
 .modal-field{margin-bottom:14px}
-.modal-field label{
-  display:block;
-  font-size:.6rem;
-  color:var(--danger);
-  letter-spacing:.15em;
-  opacity:.7;
-  text-transform:uppercase;
-  margin-bottom:6px;
-}
-.modal-field input{
-  width:100%;
-  padding:10px 14px;
-  background:rgba(0,0,0,0.5);
-  border:1px solid rgba(255,34,68,0.2);
-  border-radius:6px;
-  color:#fff;
-  font-family:'JetBrains Mono',monospace;
-  font-size:.9rem;
-  outline:none;
-  transition:border-color .2s;
-}
+.modal-field label{display:block;font-size:.6rem;color:var(--danger);letter-spacing:.15em;opacity:.7;text-transform:uppercase;margin-bottom:6px;}
+.modal-field input{width:100%;padding:10px 14px;background:rgba(0,0,0,0.5);border:1px solid rgba(255,34,68,0.2);border-radius:6px;color:#fff;font-family:'JetBrains Mono',monospace;font-size:.9rem;outline:none;transition:border-color .2s;}
 .modal-field input:focus{border-color:rgba(255,34,68,0.6);box-shadow:0 0 0 3px rgba(255,34,68,0.1)}
 .modal-err{color:var(--danger);font-size:.72rem;margin-bottom:10px;min-height:16px}
 .modal-actions{display:flex;gap:10px;margin-top:6px}
-
-/* TOAST */
-#toast{
-  position:fixed;
-  bottom:28px;right:28px;
-  max-width:360px;
-  background:var(--surface);
-  border-radius:10px;
-  padding:14px 20px;
-  font-size:.78rem;
-  opacity:0;
-  transform:translateY(10px);
-  transition:all .3s cubic-bezier(.175,.885,.32,1.275);
-  pointer-events:none;
-  z-index:99999;
-  backdrop-filter:blur(20px);
-  display:flex;align-items:center;gap:10px;
-}
-#toast::before{
-  content:'';
-  position:absolute;
-  left:0;top:0;bottom:0;
-  width:3px;
-  border-radius:10px 0 0 10px;
-}
+#toast{position:fixed;bottom:28px;right:28px;max-width:360px;background:var(--surface);border-radius:10px;padding:14px 20px;font-size:.78rem;opacity:0;transform:translateY(10px);transition:all .3s cubic-bezier(.175,.885,.32,1.275);pointer-events:none;z-index:99999;backdrop-filter:blur(20px);display:flex;align-items:center;gap:10px;}
+#toast::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px;}
 #toast.show{opacity:1;transform:translateY(0)}
 #toast.t-ok{border:1px solid rgba(0,255,136,0.3)}
 #toast.t-ok::before{background:var(--ok)}
@@ -595,63 +250,20 @@ body::after{
 #toast.t-warn::before{background:var(--warn)}
 #toast.t-err{border:1px solid rgba(255,34,68,0.3)}
 #toast.t-err::before{background:var(--danger)}
-
-/* ACTIVITY LOG */
-.log-card{
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:12px;
-  padding:20px;
-  margin-top:20px;
-  backdrop-filter:blur(20px);
-}
+.log-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-top:20px;backdrop-filter:blur(20px);}
 .log-entries{max-height:140px;overflow-y:auto;margin-top:10px}
-.log-entry{
-  display:flex;align-items:baseline;gap:10px;
-  padding:5px 0;
-  border-bottom:1px solid rgba(0,200,255,0.04);
-  font-size:.72rem;
-  animation:logIn .3s ease;
-}
+.log-entry{display:flex;align-items:baseline;gap:10px;padding:5px 0;border-bottom:1px solid rgba(0,200,255,0.04);font-size:.72rem;animation:logIn .3s ease;}
 @keyframes logIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:translateX(0)}}
 .log-time{color:var(--muted);flex-shrink:0;font-size:.65rem}
 .log-msg.ok{color:var(--ok)}
 .log-msg.warn{color:var(--warn)}
 .log-msg.err{color:var(--danger)}
 .log-msg.info{color:var(--accent)}
-
-/* LOADING */
-.loading-card{
-  grid-column:1/-1;
-  display:flex;align-items:center;justify-content:center;
-  padding:60px;
-  color:var(--muted);
-  font-size:.8rem;
-  letter-spacing:.1em;
-}
-.spinner{
-  width:24px;height:24px;
-  border:2px solid var(--border);
-  border-top-color:var(--accent);
-  border-radius:50%;
-  animation:spin .8s linear infinite;
-  margin-right:12px;
-}
+.loading-card{grid-column:1/-1;display:flex;align-items:center;justify-content:center;padding:60px;color:var(--muted);font-size:.8rem;letter-spacing:.1em;}
+.spinner{width:24px;height:24px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin-right:12px;}
 @keyframes spin{to{transform:rotate(360deg)}}
-
-/* PULSE RIPPLE for online cards */
-@keyframes ripple{
-  0%{box-shadow:0 0 0 0 rgba(0,255,136,0.3)}
-  100%{box-shadow:0 0 0 12px rgba(0,255,136,0)}
-}
-
-/* Responsive */
-@media(max-width:600px){
-  .header{padding:14px 16px}
-  .content{padding:16px}
-  .logo-text{font-size:.9rem}
-  .header-right{gap:10px}
-}
+@keyframes ripple{0%{box-shadow:0 0 0 0 rgba(0,255,136,0.3)}100%{box-shadow:0 0 0 12px rgba(0,255,136,0)}}
+@media(max-width:600px){.header{padding:14px 16px}.content{padding:16px}.logo-text{font-size:.9rem}.header-right{gap:10px}}
 </style>
 </head>
 <body>
@@ -661,32 +273,30 @@ body::after{
 <div class="corner corner-bl"></div>
 <div class="corner corner-br"></div>
 
-<!-- AUTH OVERLAY -->
 <div class="auth-overlay" id="authOverlay">
   <div class="auth-box">
     <div class="auth-logo">
-      <div class="hex">🛡️</div>
+      <div class="hex">&#x1F6E1;&#xFE0F;</div>
       <div class="auth-title">GUARDIAN</div>
       <div class="auth-subtitle">COMMAND CENTER // v2.0</div>
     </div>
     <div class="auth-field">
       <label>Master Password</label>
-      <input type="password" id="authPassword" placeholder="••••••••••••" autocomplete="off"/>
+      <input type="password" id="authPassword" placeholder="************" autocomplete="off"/>
     </div>
     <div class="auth-field">
       <label>TOTP Code</label>
       <input type="text" id="authTotp" placeholder="000000" maxlength="6" inputmode="numeric"/>
     </div>
     <div class="auth-err" id="authErr"></div>
-    <button class="auth-submit" onclick="doLogin()">AUTHENTICATE →</button>
+    <button class="auth-submit" onclick="doLogin()">AUTHENTICATE -&gt;</button>
   </div>
 </div>
 
-<!-- NUKE MODAL -->
 <div class="modal-overlay" id="nukeModal">
   <div class="modal">
-    <div class="modal-title">⚠ WIPE AUTHORIZATION</div>
-    <div class="modal-target">Target: <span id="nukeTargetLabel">—</span></div>
+    <div class="modal-title">[!] WIPE AUTHORIZATION</div>
+    <div class="modal-target">Target: <span id="nukeTargetLabel">--</span></div>
     <div class="step-indicator">
       <div class="step-dot" id="sd1"></div>
       <div class="step-dot" id="sd2"></div>
@@ -694,65 +304,56 @@ body::after{
     </div>
     <div id="nukeStep1">
       <div class="modal-field">
-        <label>Step 1 — Nuke Passphrase</label>
+        <label>Step 1 - Nuke Passphrase</label>
         <input type="password" id="nukePassphrase" placeholder="Enter passphrase"/>
       </div>
     </div>
     <div id="nukeStep2" style="display:none">
       <div class="modal-field">
-        <label>Step 2 — Type NUKE to confirm</label>
+        <label>Step 2 - Type NUKE to confirm</label>
         <input type="text" id="nukeConfirm" placeholder="NUKE"/>
       </div>
     </div>
     <div id="nukeStep3" style="display:none">
       <div class="modal-field">
-        <label>Step 3 — TOTP Code</label>
+        <label>Step 3 - TOTP Code</label>
         <input type="text" id="nukeTotp" placeholder="000000" maxlength="6" inputmode="numeric"/>
       </div>
     </div>
     <div class="modal-err" id="nukeErr"></div>
     <div class="modal-actions">
       <button class="btn btn-cancel" onclick="closeNukeModal()" style="flex:1">CANCEL</button>
-      <button class="btn btn-proceed" id="nukeNextBtn" onclick="nukeStepHandler()" style="flex:2">NEXT →</button>
+      <button class="btn btn-proceed" id="nukeNextBtn" onclick="nukeStepHandler()" style="flex:2">NEXT -&gt;</button>
     </div>
   </div>
 </div>
 
-<!-- HEADER -->
 <header class="header">
   <div class="logo">
-    <div class="logo-icon">🛡️</div>
+    <div class="logo-icon">&#x1F6E1;&#xFE0F;</div>
     <div>
       <div class="logo-text">GUARDIAN</div>
       <div class="logo-sub">Device Protection Network</div>
     </div>
   </div>
   <div class="header-right">
-    <div class="sys-stat">
-      <span id="headerDeviceCount">0</span>
-      <span>NODES</span>
-    </div>
-    <div class="sys-stat">
-      <span id="headerOnlineCount" style="color:var(--ok)">0</span>
-      <span>ONLINE</span>
-    </div>
+    <div class="sys-stat"><span id="headerDeviceCount">0</span><span>NODES</span></div>
+    <div class="sys-stat"><span id="headerOnlineCount" style="color:var(--ok)">0</span><span>ONLINE</span></div>
     <div class="live-dot" title="Live feed"></div>
     <div class="header-time" id="headerClock">00:00:00</div>
   </div>
 </header>
 
-<!-- CONTENT -->
 <div class="content">
-  <!-- STATS -->
   <div class="stats-bar" id="statsBar">
     <div class="stat-tile ok">
       <div class="tile-label">Devices Online</div>
-      <div class="tile-value" id="statOnline">—</div>
-      <div class="tile-sub">of <span id="statTotal">—</span> registered</div>
+      <div class="tile-value" id="statOnline">--</div>
+      <div class="tile-sub">of <span id="statTotal">--</span> registered</div>
     </div>
     <div class="stat-tile">
       <div class="tile-label">Last Ping</div>
-      <div class="tile-value" id="statLastPing" style="font-size:1rem;padding-top:6px">—</div>
+      <div class="tile-value" id="statLastPing" style="font-size:1rem;padding-top:6px">--</div>
       <div class="tile-sub">response time</div>
     </div>
     <div class="stat-tile warn">
@@ -761,19 +362,15 @@ body::after{
       <div class="tile-sub">queued / executing</div>
     </div>
     <div class="stat-tile danger" id="statNukeTile" style="display:none">
-      <div class="tile-label">⚠ WIPE ARMED</div>
+      <div class="tile-label">[!] WIPE ARMED</div>
       <div class="tile-value" id="statNukeCount">0</div>
       <div class="tile-sub">device(s) in countdown</div>
     </div>
   </div>
-
-  <!-- DEVICES -->
   <div class="section-label">// REGISTERED NODES</div>
   <div class="device-grid" id="deviceGrid">
-    <div class="loading-card"><div class="spinner"></div>INITIALIZING FEED…</div>
+    <div class="loading-card"><div class="spinner"></div>INITIALIZING FEED...</div>
   </div>
-
-  <!-- LOG -->
   <div class="log-card">
     <div class="section-label">// ACTIVITY LOG</div>
     <div class="log-entries" id="logEntries"></div>
@@ -783,323 +380,409 @@ body::after{
 <div id="toast"></div>
 
 <script>
-const API="";
-let authToken="";
-let nukeTargetDevice="";
-let nukeCurrentStep=1;
-let nukeCountdowns={};
-let activityLog=[];
+(function() {
+  'use strict';
 
-// CLOCK
-function updateClock(){
-  const now=new Date();
-  document.getElementById("headerClock").textContent=now.toTimeString().slice(0,8);
-}
-setInterval(updateClock,1000);
-updateClock();
+  var API = '';
+  var authToken = '';
+  var nukeTargetDevice = '';
+  var nukeCurrentStep = 1;
+  var nukeCountdowns = {};
+  var activityLog = [];
 
-// LOGIN
-async function doLogin(){
-  const pass=document.getElementById("authPassword").value;
-  const totp=document.getElementById("authTotp").value;
-  if(!pass||!totp){document.getElementById("authErr").textContent="⚠ All fields required";return;}
-  authToken=`${pass}:${totp}`;
-  const res=await apiFetch("/devices");
-  if(res.ok){
-    const ov=document.getElementById("authOverlay");
-    ov.style.transition="opacity .4s";
-    ov.style.opacity="0";
-    setTimeout(()=>ov.style.display="none",400);
-    addLog("Authentication successful","ok");
-    startDashboard();
-  } else {
-    document.getElementById("authErr").textContent="⚠ Invalid credentials";
-    authToken="";
-    const box=document.querySelector(".auth-box");
-    box.style.animation="shake .3s ease";
-    setTimeout(()=>box.style.animation="",300);
+  function updateClock() {
+    var now = new Date();
+    document.getElementById('headerClock').textContent = now.toTimeString().slice(0, 8);
   }
-}
-document.addEventListener("keydown",e=>{
-  if(e.key==="Enter"&&document.getElementById("authOverlay").style.display!=="none")doLogin();
-  if(e.key==="Enter"&&document.getElementById("nukeModal").classList.contains("open"))nukeStepHandler();
-});
+  setInterval(updateClock, 1000);
+  updateClock();
 
-// API
-async function apiFetch(path,method="GET",body=null){
-  const opts={method,headers:{"Authorization":`Bearer ${authToken}`,"Content-Type":"application/json"}};
-  if(body)opts.body=JSON.stringify(body);
-  return fetch(API+path,opts);
-}
-async function sendCommand(deviceId,command,params={}){
-  const res=await apiFetch("/command","POST",{device_id:deviceId,command,params});
-  const data=await res.json().catch(()=>({}));
-  if(res.ok){
-    toast(`✓ ${command.toUpperCase()} → ${deviceId}`,"ok");
-    addLog(`Command [${command}] sent to ${deviceId}`,"info");
-  } else {
-    toast(`✕ ${data.detail||"Error"}`,"err");
-    addLog(`Command [${command}] FAILED: ${data.detail||"Error"}`,"err");
+  function apiFetch(path, method, body) {
+    method = method || 'GET';
+    var opts = {
+      method: method,
+      headers: {
+        'Authorization': 'Bearer ' + authToken,
+        'Content-Type': 'application/json'
+      }
+    };
+    if (body) { opts.body = JSON.stringify(body); }
+    return fetch(API + path, opts);
   }
-}
 
-// DASHBOARD
-function startDashboard(){
-  loadDevices();
-  setInterval(loadDevices,10000);
-}
-
-async function loadDevices(){
-  const res=await apiFetch("/devices");
-  if(!res.ok)return;
-  const{devices}=await res.json();
-  renderDevices(devices);
-  const online=devices.filter(d=>isOnline(d)).length;
-  document.getElementById("statOnline").textContent=online;
-  document.getElementById("statTotal").textContent=devices.length;
-  document.getElementById("headerDeviceCount").textContent=devices.length;
-  document.getElementById("headerOnlineCount").textContent=online;
-  const nukeArmed=Object.values(nukeCountdowns).filter(c=>c.active).length;
-  const nukeTile=document.getElementById("statNukeTile");
-  if(nukeArmed>0){
-    nukeTile.style.display="";
-    document.getElementById("statNukeCount").textContent=nukeArmed;
-  } else nukeTile.style.display="none";
-  devices.forEach(d=>checkNukeStatus(d.device_id));
-}
-
-function isOnline(d){
-  if(!d.last_seen)return false;
-  return(Date.now()-new Date(d.last_seen).getTime())<120000;
-}
-
-function renderDevices(devices){
-  const grid=document.getElementById("deviceGrid");
-  if(!devices.length){
-    grid.innerHTML='<div class="loading-card">NO DEVICES REGISTERED</div>';
-    return;
+  function doLogin() {
+    var pass = document.getElementById('authPassword').value;
+    var totp = document.getElementById('authTotp').value;
+    if (!pass || !totp) {
+      document.getElementById('authErr').textContent = '[!] All fields required';
+      return;
+    }
+    authToken = pass + ':' + totp;
+    apiFetch('/devices').then(function(res) {
+      if (res.ok) {
+        var ov = document.getElementById('authOverlay');
+        ov.style.transition = 'opacity .4s';
+        ov.style.opacity = '0';
+        setTimeout(function() { ov.style.display = 'none'; }, 400);
+        addLog('Authentication successful', 'ok');
+        startDashboard();
+      } else {
+        document.getElementById('authErr').textContent = '[!] Invalid credentials';
+        authToken = '';
+        var box = document.querySelector('.auth-box');
+        box.style.animation = 'shake .3s ease';
+        setTimeout(function() { box.style.animation = ''; }, 300);
+      }
+    }).catch(function() {
+      document.getElementById('authErr').textContent = '[!] Connection failed';
+      authToken = '';
+    });
   }
-  grid.innerHTML=devices.map((d,i)=>deviceCard(d,i)).join("");
-}
 
-function platformIcon(p){
-  if(!p)return "💻";
-  const lp=p.toLowerCase();
-  if(lp.includes("mac")||lp.includes("darwin"))return "";
-  if(lp.includes("win"))return "🪟";
-  if(lp.includes("android"))return "📱";
-  if(lp.includes("linux"))return "🐧";
-  return "💻";
-}
+  window.doLogin = doLogin;
 
-// FIX: use data-id attribute + event delegation to avoid quote injection in onclick
-function deviceCard(d,idx){
-  const online=isOnline(d);
-  const lastSeen=d.last_seen?new Date(d.last_seen):null;
-  const lastSeenStr=lastSeen?timeDiff(lastSeen):"Never";
-  const armed=nukeCountdowns[d.device_id]?.active;
-  const icon=platformIcon(d.platform);
-  const animDelay=idx*0.08;
-  const eid=encodeURIComponent(d.device_id);
-  return `<div class="device-card${armed?" armed":""}" id="card-${eid}" data-id="${eid}" style="animation-delay:${animDelay}s">
-    <div class="card-top">
-      <div class="device-identity">
-        <div class="device-name">${icon} ${d.device_id}</div>
-        <div class="device-id">${d.hostname||"UNKNOWN HOST"} &bull; ${d.platform||"UNKNOWN"}</div>
-      </div>
-      <div class="status-badge ${online?"online":"offline"}">
-        <div class="status-dot"></div>
-        ${online?"ONLINE":"OFFLINE"}
-      </div>
-    </div>
-    <div class="info-table">
-      <div class="info-row"><span class="info-key">OS_VER</span><span class="info-val accent">${d.os_version||"—"}</span></div>
-      <div class="info-row"><span class="info-key">AGENT_VER</span><span class="info-val">${d.agent_version||"—"}</span></div>
-      <div class="info-row"><span class="info-key">LAST_SEEN</span><span class="info-val">${lastSeenStr}</span></div>
-      <div class="info-row"><span class="info-key">IP_ADDR</span><span class="info-val accent">${d.ip||"—"}</span></div>
-    </div>
-    <div class="actions">
-      <button class="btn btn-ping"    data-cmd="ping"     data-id="${eid}">▶ PING</button>
-      <button class="btn btn-locate"  data-cmd="location" data-id="${eid}">◎ LOCATE</button>
-      <button class="btn btn-lock"    data-cmd="lock"     data-id="${eid}">⊘ LOCK</button>
-      <button class="btn btn-nuke"    data-nuke="${eid}">⚠ NUKE</button>
-    </div>
-    ${armed?nukePanel(d.device_id):""}
-  </div>`;
-}
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && document.getElementById('authOverlay').style.display !== 'none') { doLogin(); }
+    if (e.key === 'Enter' && document.getElementById('nukeModal').classList.contains('open')) { nukeStepHandler(); }
+  });
 
-// EVENT DELEGATION — replaces all inline onclick on cards
-document.addEventListener("click",function(e){
-  const cmdBtn=e.target.closest("[data-cmd]");
-  if(cmdBtn){
-    const id=decodeURIComponent(cmdBtn.dataset.id);
-    sendCommand(id,cmdBtn.dataset.cmd);
-    return;
+  function sendCommand(deviceId, command) {
+    apiFetch('/command', 'POST', { device_id: deviceId, command: command, params: {} })
+      .then(function(res) {
+        return res.json().then(function(data) { return { ok: res.ok, data: data }; });
+      })
+      .then(function(r) {
+        if (r.ok) {
+          toast('[OK] ' + command.toUpperCase() + ' -> ' + deviceId, 'ok');
+          addLog('Command [' + command + '] sent to ' + deviceId, 'info');
+        } else {
+          toast('[ERR] ' + (r.data.detail || 'Error'), 'err');
+          addLog('Command [' + command + '] FAILED: ' + (r.data.detail || 'Error'), 'err');
+        }
+      })
+      .catch(function() { toast('[ERR] Network error', 'err'); });
   }
-  const nukeBtn=e.target.closest("[data-nuke]");
-  if(nukeBtn){
-    openNukeModal(decodeURIComponent(nukeBtn.dataset.nuke));
-    return;
-  }
-  const abortBtn=e.target.closest("[data-abort]");
-  if(abortBtn){
-    abortNuke(decodeURIComponent(abortBtn.dataset.abort));
-    return;
-  }
-});
 
-function nukePanel(deviceId){
-  const cd=nukeCountdowns[deviceId];
-  if(!cd||!cd.active)return "";
-  const pct=Math.round((cd.remaining/cd.total)*100);
-  const m=Math.floor(cd.remaining/60),s=cd.remaining%60;
-  const fillClass=pct>50?"fill-danger":pct>20?"fill-warn":"fill-danger";
-  const eid=encodeURIComponent(deviceId);
-  return `<div class="nuke-arm-panel">
-    <div class="nuke-timer-label">◉ WIPE COUNTDOWN ACTIVE</div>
-    <div class="nuke-countdown" id="nkd-${eid}">${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}</div>
-    <div class="progress-wrap">
-      <div class="progress-label"><span>EXECUTION</span><span id="nkp-${eid}">${pct}%</span></div>
-      <div class="progress-track"><div class="progress-fill ${fillClass}" id="nkf-${eid}" style="width:${100-pct}%"></div></div>
-    </div>
-    <div class="nuke-actions">
-      <button class="btn btn-abort" style="flex:1" data-abort="${eid}">◼ ABORT WIPE</button>
-    </div>
-  </div>`;
-}
-
-function timeDiff(date){
-  const diff=Date.now()-date.getTime();
-  if(diff<60000)return `${Math.round(diff/1000)}s ago`;
-  if(diff<3600000)return `${Math.round(diff/60000)}m ago`;
-  return date.toLocaleTimeString();
-}
-
-// NUKE MODAL
-function openNukeModal(deviceId){
-  nukeTargetDevice=deviceId;
-  nukeCurrentStep=1;
-  document.getElementById("nukeTargetLabel").textContent=deviceId;
-  ["nukeStep1","nukeStep2","nukeStep3"].forEach((id,i)=>document.getElementById(id).style.display=i===0?"block":"none");
-  ["nukePassphrase","nukeConfirm","nukeTotp"].forEach(id=>{const el=document.getElementById(id);if(el)el.value="";});
-  document.getElementById("nukeErr").textContent="";
-  document.getElementById("nukeNextBtn").textContent="NEXT →";
-  updateStepDots(1);
-  document.getElementById("nukeModal").classList.add("open");
-  setTimeout(()=>document.getElementById("nukePassphrase").focus(),100);
-}
-function updateStepDots(step){
-  for(let i=1;i<=3;i++){
-    const dot=document.getElementById("sd"+i);
-    if(i<step)dot.className="step-dot done";
-    else if(i===step)dot.className="step-dot active";
-    else dot.className="step-dot";
-  }
-}
-function closeNukeModal(){document.getElementById("nukeModal").classList.remove("open");nukeTargetDevice="";}
-async function nukeStepHandler(){
-  const step=nukeCurrentStep;
-  let value="";
-  if(step===1)value=document.getElementById("nukePassphrase").value;
-  if(step===2)value=document.getElementById("nukeConfirm").value;
-  if(step===3)value=document.getElementById("nukeTotp").value;
-  if(!value.trim()){document.getElementById("nukeErr").textContent="⚠ Field required";return;}
-  const res=await apiFetch("/nuke/init","POST",{device_id:nukeTargetDevice,step,value});
-  const data=await res.json().catch(()=>({}));
-  if(!res.ok){document.getElementById("nukeErr").textContent=`⚠ ${data.detail||"Error"}`;return;}
-  document.getElementById("nukeErr").textContent="";
-  if(step<3){
-    document.getElementById(`nukeStep${step}`).style.display="none";
-    document.getElementById(`nukeStep${step+1}`).style.display="block";
-    nukeCurrentStep=step+1;
-    updateStepDots(nukeCurrentStep);
-    if(nukeCurrentStep===3)document.getElementById("nukeNextBtn").textContent="⚠ ARM WIPE";
-    setTimeout(()=>document.getElementById(["nukePassphrase","nukeConfirm","nukeTotp"][nukeCurrentStep-1]).focus(),50);
-  } else {
-    closeNukeModal();
-    toast(`⚠ WIPE ARMED: ${nukeTargetDevice} — 10min countdown`,"warn");
-    addLog(`NUKE ARMED for ${nukeTargetDevice}`,"warn");
-    checkNukeStatus(nukeTargetDevice);
-  }
-}
-
-// NUKE STATUS
-async function checkNukeStatus(deviceId){
-  const res=await apiFetch(`/nuke/status/${deviceId}`);
-  if(!res.ok)return;
-  const data=await res.json().catch(()=>({}));
-  if(data.active&&!data.aborted&&!data.executed){
-    const wasActive=nukeCountdowns[deviceId]?.active;
-    nukeCountdowns[deviceId]={active:true,remaining:data.remaining_seconds,total:data.countdown_seconds};
-    if(!wasActive)startCountdownTick(deviceId);
-  } else {
-    if(nukeCountdowns[deviceId]?.active)addLog(`Nuke status cleared for ${deviceId}`,"info");
-    nukeCountdowns[deviceId]={active:false};
-  }
-}
-
-function startCountdownTick(deviceId){
-  if(nukeCountdowns[deviceId]?.tickRunning)return;
-  nukeCountdowns[deviceId].tickRunning=true;
-  const eid=encodeURIComponent(deviceId);
-  const tick=setInterval(()=>{
-    const cd=nukeCountdowns[deviceId];
-    if(!cd||!cd.active||cd.remaining<=0){clearInterval(tick);return;}
-    cd.remaining--;
-    const m=Math.floor(cd.remaining/60),s=cd.remaining%60;
-    const disp=document.getElementById(`nkd-${eid}`);
-    const fill=document.getElementById(`nkf-${eid}`);
-    const pctEl=document.getElementById(`nkp-${eid}`);
-    if(disp)disp.textContent=`${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
-    const pct=Math.round((cd.remaining/cd.total)*100);
-    if(fill)fill.style.width=(100-pct)+"%";
-    if(pctEl)pctEl.textContent=pct+"%";
-  },1000);
-}
-
-async function abortNuke(deviceId){
-  const res=await apiFetch("/nuke/abort","POST",{device_id:deviceId});
-  const data=await res.json().catch(()=>({}));
-  if(res.ok){
-    toast(`✓ WIPE ABORTED: ${deviceId}`,"ok");
-    addLog(`Nuke ABORTED for ${deviceId}`,"warn");
-    nukeCountdowns[deviceId]={active:false};
+  function startDashboard() {
     loadDevices();
-  } else toast(`✕ ${data.detail||"Abort failed"}`,"err");
-}
+    setInterval(loadDevices, 10000);
+  }
 
-// TOAST
-function toast(msg,type="ok"){
-  const el=document.getElementById("toast");
-  el.textContent=msg;
-  el.className="show t-"+type;
-  clearTimeout(el._t);
-  el._t=setTimeout(()=>el.className="",3500);
-}
+  function loadDevices() {
+    apiFetch('/devices').then(function(res) {
+      if (!res.ok) { return; }
+      res.json().then(function(payload) {
+        var devices = payload.devices;
+        renderDevices(devices);
+        var online = devices.filter(function(d) { return isOnline(d); }).length;
+        document.getElementById('statOnline').textContent = online;
+        document.getElementById('statTotal').textContent = devices.length;
+        document.getElementById('headerDeviceCount').textContent = devices.length;
+        document.getElementById('headerOnlineCount').textContent = online;
+        var nukeArmed = Object.keys(nukeCountdowns).filter(function(k) { return nukeCountdowns[k].active; }).length;
+        var nukeTile = document.getElementById('statNukeTile');
+        if (nukeArmed > 0) {
+          nukeTile.style.display = '';
+          document.getElementById('statNukeCount').textContent = nukeArmed;
+        } else {
+          nukeTile.style.display = 'none';
+        }
+        devices.forEach(function(d) { checkNukeStatus(d.device_id); });
+      });
+    }).catch(function() {});
+  }
 
-// ACTIVITY LOG
-function addLog(msg,type="info"){
-  const now=new Date();
-  const time=now.toTimeString().slice(0,8);
-  activityLog.unshift({time,msg,type});
-  if(activityLog.length>50)activityLog.pop();
-  const container=document.getElementById("logEntries");
-  if(!container)return;
-  const entry=document.createElement("div");
-  entry.className="log-entry";
-  entry.innerHTML=`<span class="log-time">${time}</span><span class="log-msg ${type}">${msg}</span>`;
-  container.insertBefore(entry,container.firstChild);
-  if(container.children.length>30)container.removeChild(container.lastChild);
-}
+  function isOnline(d) {
+    if (!d.last_seen) { return false; }
+    return (Date.now() - new Date(d.last_seen).getTime()) < 120000;
+  }
 
-// SHAKE ANIMATION
-const shakeStyle=document.createElement("style");
-shakeStyle.textContent="@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}";
-document.head.appendChild(shakeStyle);
+  function renderDevices(devices) {
+    var grid = document.getElementById('deviceGrid');
+    if (!devices.length) {
+      grid.innerHTML = '<div class="loading-card">NO DEVICES REGISTERED</div>';
+      return;
+    }
+    grid.innerHTML = devices.map(function(d, i) { return deviceCard(d, i); }).join('');
+  }
 
-// BOOT LOG
-addLog("Guardian Command Center initialized","info");
-addLog("Awaiting authentication…","warn");
+  function platformIcon(p) {
+    if (!p) { return '[PC]'; }
+    var lp = p.toLowerCase();
+    if (lp.indexOf('mac') !== -1 || lp.indexOf('darwin') !== -1) { return '[MAC]'; }
+    if (lp.indexOf('win') !== -1) { return '[WIN]'; }
+    if (lp.indexOf('android') !== -1) { return '[MOB]'; }
+    if (lp.indexOf('linux') !== -1) { return '[LNX]'; }
+    return '[PC]';
+  }
+
+  function deviceCard(d, idx) {
+    var online = isOnline(d);
+    var lastSeen = d.last_seen ? new Date(d.last_seen) : null;
+    var lastSeenStr = lastSeen ? timeDiff(lastSeen) : 'Never';
+    var armed = nukeCountdowns[d.device_id] && nukeCountdowns[d.device_id].active;
+    var icon = platformIcon(d.platform);
+    var animDelay = idx * 0.08;
+    var eid = encodeURIComponent(d.device_id);
+    var armedClass = armed ? ' armed' : '';
+    var statusClass = online ? 'online' : 'offline';
+    var statusLabel = online ? 'ONLINE' : 'OFFLINE';
+    var html = '<div class="device-card' + armedClass + '" id="card-' + eid + '" data-id="' + eid + '" style="animation-delay:' + animDelay + 's">';
+    html += '<div class="card-top">';
+    html += '<div class="device-identity">';
+    html += '<div class="device-name">' + icon + ' ' + escHtml(d.device_id) + '</div>';
+    html += '<div class="device-id">' + escHtml(d.hostname || 'UNKNOWN HOST') + ' &bull; ' + escHtml(d.platform || 'UNKNOWN') + '</div>';
+    html += '</div>';
+    html += '<div class="status-badge ' + statusClass + '"><div class="status-dot"></div>' + statusLabel + '</div>';
+    html += '</div>';
+    html += '<div class="info-table">';
+    html += '<div class="info-row"><span class="info-key">OS_VER</span><span class="info-val accent">' + escHtml(d.os_version || '--') + '</span></div>';
+    html += '<div class="info-row"><span class="info-key">AGENT_VER</span><span class="info-val">' + escHtml(d.agent_version || '--') + '</span></div>';
+    html += '<div class="info-row"><span class="info-key">LAST_SEEN</span><span class="info-val">' + escHtml(lastSeenStr) + '</span></div>';
+    html += '<div class="info-row"><span class="info-key">IP_ADDR</span><span class="info-val accent">' + escHtml(d.ip || '--') + '</span></div>';
+    html += '</div>';
+    html += '<div class="actions">';
+    html += '<button class="btn btn-ping" data-cmd="ping" data-id="' + eid + '">[>] PING</button>';
+    html += '<button class="btn btn-locate" data-cmd="location" data-id="' + eid + '">[o] LOCATE</button>';
+    html += '<button class="btn btn-lock" data-cmd="lock" data-id="' + eid + '">[x] LOCK</button>';
+    html += '<button class="btn btn-nuke" data-nuke="' + eid + '">[!] NUKE</button>';
+    html += '</div>';
+    if (armed) { html += nukePanel(d.device_id); }
+    html += '</div>';
+    return html;
+  }
+
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  document.addEventListener('click', function(e) {
+    var cmdBtn = e.target.closest ? e.target.closest('[data-cmd]') : null;
+    if (cmdBtn) {
+      sendCommand(decodeURIComponent(cmdBtn.dataset.id), cmdBtn.dataset.cmd);
+      return;
+    }
+    var nukeBtn = e.target.closest ? e.target.closest('[data-nuke]') : null;
+    if (nukeBtn) {
+      openNukeModal(decodeURIComponent(nukeBtn.dataset.nuke));
+      return;
+    }
+    var abortBtn = e.target.closest ? e.target.closest('[data-abort]') : null;
+    if (abortBtn) {
+      abortNuke(decodeURIComponent(abortBtn.dataset.abort));
+      return;
+    }
+  });
+
+  function nukePanel(deviceId) {
+    var cd = nukeCountdowns[deviceId];
+    if (!cd || !cd.active) { return ''; }
+    var pct = Math.round((cd.remaining / cd.total) * 100);
+    var m = Math.floor(cd.remaining / 60);
+    var s = cd.remaining % 60;
+    var fillClass = pct > 20 ? 'fill-warn' : 'fill-danger';
+    var eid = encodeURIComponent(deviceId);
+    var mm = String(m).padStart(2, '0');
+    var ss = String(s).padStart(2, '0');
+    var bar = 100 - pct;
+    var html = '<div class="nuke-arm-panel">';
+    html += '<div class="nuke-timer-label">[*] WIPE COUNTDOWN ACTIVE</div>';
+    html += '<div class="nuke-countdown" id="nkd-' + eid + '">' + mm + ':' + ss + '</div>';
+    html += '<div class="progress-wrap">';
+    html += '<div class="progress-label"><span>EXECUTION</span><span id="nkp-' + eid + '">' + pct + '%</span></div>';
+    html += '<div class="progress-track"><div class="progress-fill ' + fillClass + '" id="nkf-' + eid + '" style="width:' + bar + '%"></div></div>';
+    html += '</div>';
+    html += '<div class="nuke-actions"><button class="btn btn-abort" style="flex:1" data-abort="' + eid + '">[x] ABORT WIPE</button></div>';
+    html += '</div>';
+    return html;
+  }
+
+  function timeDiff(date) {
+    var diff = Date.now() - date.getTime();
+    if (diff < 60000) { return Math.round(diff / 1000) + 's ago'; }
+    if (diff < 3600000) { return Math.round(diff / 60000) + 'm ago'; }
+    return date.toLocaleTimeString();
+  }
+
+  function openNukeModal(deviceId) {
+    nukeTargetDevice = deviceId;
+    nukeCurrentStep = 1;
+    document.getElementById('nukeTargetLabel').textContent = deviceId;
+    var steps = ['nukeStep1', 'nukeStep2', 'nukeStep3'];
+    steps.forEach(function(id, i) {
+      document.getElementById(id).style.display = (i === 0) ? 'block' : 'none';
+    });
+    ['nukePassphrase', 'nukeConfirm', 'nukeTotp'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) { el.value = ''; }
+    });
+    document.getElementById('nukeErr').textContent = '';
+    document.getElementById('nukeNextBtn').textContent = 'NEXT ->';
+    updateStepDots(1);
+    document.getElementById('nukeModal').classList.add('open');
+    setTimeout(function() { document.getElementById('nukePassphrase').focus(); }, 100);
+  }
+
+  window.openNukeModal = openNukeModal;
+
+  function updateStepDots(step) {
+    for (var i = 1; i <= 3; i++) {
+      var dot = document.getElementById('sd' + i);
+      if (i < step) { dot.className = 'step-dot done'; }
+      else if (i === step) { dot.className = 'step-dot active'; }
+      else { dot.className = 'step-dot'; }
+    }
+  }
+
+  function closeNukeModal() {
+    document.getElementById('nukeModal').classList.remove('open');
+    nukeTargetDevice = '';
+  }
+
+  window.closeNukeModal = closeNukeModal;
+
+  function nukeStepHandler() {
+    var step = nukeCurrentStep;
+    var fields = ['nukePassphrase', 'nukeConfirm', 'nukeTotp'];
+    var value = document.getElementById(fields[step - 1]).value;
+    if (!value.trim()) {
+      document.getElementById('nukeErr').textContent = '[!] Field required';
+      return;
+    }
+    apiFetch('/nuke/init', 'POST', { device_id: nukeTargetDevice, step: step, value: value })
+      .then(function(res) {
+        return res.json().then(function(data) { return { ok: res.ok, data: data }; });
+      })
+      .then(function(r) {
+        if (!r.ok) {
+          document.getElementById('nukeErr').textContent = '[!] ' + (r.data.detail || 'Error');
+          return;
+        }
+        document.getElementById('nukeErr').textContent = '';
+        if (step < 3) {
+          document.getElementById('nukeStep' + step).style.display = 'none';
+          document.getElementById('nukeStep' + (step + 1)).style.display = 'block';
+          nukeCurrentStep = step + 1;
+          updateStepDots(nukeCurrentStep);
+          if (nukeCurrentStep === 3) {
+            document.getElementById('nukeNextBtn').textContent = '[!] ARM WIPE';
+          }
+          setTimeout(function() {
+            document.getElementById(fields[nukeCurrentStep - 1]).focus();
+          }, 50);
+        } else {
+          closeNukeModal();
+          toast('[!] WIPE ARMED: ' + nukeTargetDevice + ' -- 10min countdown', 'warn');
+          addLog('NUKE ARMED for ' + nukeTargetDevice, 'warn');
+          checkNukeStatus(nukeTargetDevice);
+        }
+      })
+      .catch(function() {
+        document.getElementById('nukeErr').textContent = '[!] Network error';
+      });
+  }
+
+  window.nukeStepHandler = nukeStepHandler;
+
+  function checkNukeStatus(deviceId) {
+    apiFetch('/nuke/status/' + deviceId).then(function(res) {
+      if (!res.ok) { return; }
+      res.json().then(function(data) {
+        if (data.active && !data.aborted && !data.executed) {
+          var wasActive = nukeCountdowns[deviceId] && nukeCountdowns[deviceId].active;
+          nukeCountdowns[deviceId] = { active: true, remaining: data.remaining_seconds, total: data.countdown_seconds };
+          if (!wasActive) { startCountdownTick(deviceId); }
+        } else {
+          if (nukeCountdowns[deviceId] && nukeCountdowns[deviceId].active) {
+            addLog('Nuke status cleared for ' + deviceId, 'info');
+          }
+          nukeCountdowns[deviceId] = { active: false };
+        }
+      });
+    }).catch(function() {});
+  }
+
+  function startCountdownTick(deviceId) {
+    if (nukeCountdowns[deviceId] && nukeCountdowns[deviceId].tickRunning) { return; }
+    nukeCountdowns[deviceId].tickRunning = true;
+    var eid = encodeURIComponent(deviceId);
+    var tick = setInterval(function() {
+      var cd = nukeCountdowns[deviceId];
+      if (!cd || !cd.active || cd.remaining <= 0) { clearInterval(tick); return; }
+      cd.remaining--;
+      var m = Math.floor(cd.remaining / 60);
+      var s = cd.remaining % 60;
+      var disp = document.getElementById('nkd-' + eid);
+      var fill = document.getElementById('nkf-' + eid);
+      var pctEl = document.getElementById('nkp-' + eid);
+      if (disp) { disp.textContent = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0'); }
+      var pct = Math.round((cd.remaining / cd.total) * 100);
+      if (fill) { fill.style.width = (100 - pct) + '%'; }
+      if (pctEl) { pctEl.textContent = pct + '%'; }
+    }, 1000);
+  }
+
+  function abortNuke(deviceId) {
+    apiFetch('/nuke/abort', 'POST', { device_id: deviceId })
+      .then(function(res) {
+        return res.json().then(function(data) { return { ok: res.ok, data: data }; });
+      })
+      .then(function(r) {
+        if (r.ok) {
+          toast('[OK] WIPE ABORTED: ' + deviceId, 'ok');
+          addLog('Nuke ABORTED for ' + deviceId, 'warn');
+          nukeCountdowns[deviceId] = { active: false };
+          loadDevices();
+        } else {
+          toast('[ERR] ' + (r.data.detail || 'Abort failed'), 'err');
+        }
+      })
+      .catch(function() { toast('[ERR] Network error', 'err'); });
+  }
+
+  function toast(msg, type) {
+    type = type || 'ok';
+    var el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'show t-' + type;
+    clearTimeout(el._t);
+    el._t = setTimeout(function() { el.className = ''; }, 3500);
+  }
+
+  function addLog(msg, type) {
+    type = type || 'info';
+    var now = new Date();
+    var time = now.toTimeString().slice(0, 8);
+    activityLog.unshift({ time: time, msg: msg, type: type });
+    if (activityLog.length > 50) { activityLog.pop(); }
+    var container = document.getElementById('logEntries');
+    if (!container) { return; }
+    var entry = document.createElement('div');
+    entry.className = 'log-entry';
+    var tSpan = document.createElement('span');
+    tSpan.className = 'log-time';
+    tSpan.textContent = time;
+    var mSpan = document.createElement('span');
+    mSpan.className = 'log-msg ' + type;
+    mSpan.textContent = msg;
+    entry.appendChild(tSpan);
+    entry.appendChild(mSpan);
+    container.insertBefore(entry, container.firstChild);
+    if (container.children.length > 30) { container.removeChild(container.lastChild); }
+  }
+
+  var shakeStyle = document.createElement('style');
+  shakeStyle.textContent = '@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}';
+  document.head.appendChild(shakeStyle);
+
+  addLog('Guardian Command Center initialized', 'info');
+  addLog('Awaiting authentication...', 'warn');
+
+}());
 </script>
 </body>
 </html>
