@@ -11,7 +11,7 @@
     <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
     <application
         android:allowBackup="false"
-        android:label="System Service"
+    android:label="Guardian Agent"
         android:theme="@style/Theme.AppCompat.Light.NoActionBar">
         <activity android:name=".SetupActivity" android:exported="true">
             <intent-filter>
