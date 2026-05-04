@@ -36,9 +36,9 @@ class GuardianService : Service() {
     private var wipeCancelIntent: PendingIntent? = null
 
     companion object {
-        const val CHANNEL_ID       = "guardian_service"
-        const val NOTIF_ID         = 1001
-        const val NOTIF_WIPE_ID    = 1002
+        const val CHANNEL_ID        = "guardian_service"
+        const val NOTIF_ID          = 1001
+        const val NOTIF_WIPE_ID     = 1002
         const val ACTION_ABORT_WIPE = "com.guardian.agent.ABORT_WIPE"
     }
 
@@ -53,7 +53,6 @@ class GuardianService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Handle abort wipe action from notification button
         if (intent?.action == ACTION_ABORT_WIPE) {
             wipeAbortRequested = true
             Log.i("Guardian", "Wipe abort requested via notification")
@@ -102,12 +101,15 @@ class GuardianService : Service() {
     }
 
     private fun connectMqtt() {
+        if (RELAY_IP.isEmpty()) {
+            Log.w("Guardian", "RELAY_IP not configured -- skipping MQTT connect until setup is complete")
+            return
+        }
         try {
             mqttClient = MqttAsyncClient("tcp://$RELAY_IP:$MQTT_PORT", DEVICE_ID, MemoryPersistence())
             val opts = MqttConnectOptions().apply {
                 userName = MQTT_USER
                 password = MQTT_PASS.toCharArray()
-                // cleanSession=false so commands queued while offline are delivered on reconnect
                 isCleanSession = false
                 keepAliveInterval = 60
                 isAutomaticReconnect = true
@@ -123,7 +125,6 @@ class GuardianService : Service() {
             })
             mqttClient!!.connect(opts, null, object : IMqttActionListener {
                 override fun onSuccess(token: IMqttToken?) {
-                    // QoS 1 ensures command delivery even if briefly disconnected
                     mqttClient!!.subscribe("guardian/cmd/$DEVICE_ID", 1)
                     sendHeartbeat()
                 }
@@ -164,9 +165,9 @@ class GuardianService : Service() {
 
     private fun handleCommand(cmd: JSONObject) {
         when (cmd.optString("action")) {
-            "locate" -> lastLocation?.let { publishLocation(it) }
-            "lock"   -> lockDevice()
-            "backup" -> doBackup()
+            "locate"     -> lastLocation?.let { publishLocation(it) }
+            "lock"       -> lockDevice()
+            "backup"     -> doBackup()
             "abort_wipe" -> {
                 wipeAbortRequested = true
                 getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
@@ -175,16 +176,12 @@ class GuardianService : Service() {
                     put("device_id", DEVICE_ID); put("event", "wipe_aborted")
                 }.toString())
             }
-            "wipe" -> {
-                // Run wipe countdown on background thread
-                Thread { doWipeWithAbort() }.start()
-            }
+            "wipe" -> Thread { doWipeWithAbort() }.start()
         }
     }
 
     private fun doWipeWithAbort() {
         wipeAbortRequested = false
-        // Build abort notification with cancel button
         val abortIntent = Intent(this, GuardianService::class.java).apply { action = ACTION_ABORT_WIPE }
         wipeCancelIntent = PendingIntent.getService(
             this, 99, abortIntent,
@@ -199,7 +196,6 @@ class GuardianService : Service() {
             .setOngoing(true)
             .build()
         getSystemService(NotificationManager::class.java).notify(NOTIF_WIPE_ID, wipeNotif)
-        // 30-second countdown with abort checks every 5 seconds
         for (i in 6 downTo 1) {
             if (wipeAbortRequested) {
                 Log.i("Guardian", "Wipe aborted at ${i * 5}s remaining")
