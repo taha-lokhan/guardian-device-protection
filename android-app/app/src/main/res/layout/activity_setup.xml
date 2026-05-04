@@ -4,39 +4,53 @@
     android:background="#0f0f0f" android:padding="24dp">
     <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
         android:orientation="vertical" android:gravity="center_horizontal">
+
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:text="GUARDIAN SETUP" android:textColor="#4f98a3"
             android:textSize="24sp" android:textStyle="bold" android:layout_marginBottom="8dp"/>
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:text="Device Protection Agent" android:textColor="#7a7974"
             android:textSize="14sp" android:layout_marginBottom="32dp"/>
+
         <EditText android:id="@+id/et_device_name"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="Device Name (e.g. My Phone)" android:inputType="text"
             android:textColor="#cdccca" android:hintTextColor="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
+
         <EditText android:id="@+id/et_device_id"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="Device ID (e.g. phone-01)" android:inputType="text"
             android:textColor="#cdccca" android:hintTextColor="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
+
         <EditText android:id="@+id/et_relay_ip"
             android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:hint="Relay WireGuard IP (e.g. 10.99.0.1)" android:inputType="text"
+            android:hint="Relay VPS IP or hostname (e.g. 203.0.113.10)" android:inputType="text"
             android:textColor="#cdccca" android:hintTextColor="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
+
+        <EditText android:id="@+id/et_wg_ip"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="This device WireGuard IP (e.g. 10.99.0.2)" android:inputType="text"
+            android:textColor="#cdccca" android:hintTextColor="#5a5957"
+            android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
+
         <EditText android:id="@+id/et_mqtt_pass"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="MQTT Password (from credentials file)" android:inputType="textPassword"
             android:textColor="#cdccca" android:hintTextColor="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="32dp"/>
+
         <Button android:id="@+id/btn_save"
             android:layout_width="match_parent" android:layout_height="56dp"
             android:text="ACTIVATE GUARDIAN" android:backgroundTint="#01696f"
             android:textColor="#ffffff" android:textStyle="bold"/>
+
         <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
             android:text="After activation, grant Device Administrator permission when prompted."
             android:textColor="#7a7974" android:textSize="12sp" android:gravity="center"
             android:layout_marginTop="16dp" android:padding="8dp"/>
+
     </LinearLayout>
 </ScrollView>
