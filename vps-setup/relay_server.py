@@ -3,7 +3,6 @@
 Guardian Relay Server v2.0
 FastAPI + MQTT relay with nuke system, TOTP auth, ntfy.sh alerts, command TTL
 """
-
 import asyncio
 import json
 import os
@@ -16,7 +15,6 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict
-
 import paho.mqtt.client as mqtt
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,26 +23,29 @@ from pydantic import BaseModel
 import httpx
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
-MQTT_BROKER       = os.getenv("MQTT_BROKER", "localhost")
-MQTT_PORT         = int(os.getenv("MQTT_PORT", 1883))
-MQTT_USER         = os.getenv("MQTT_USER", "guardian")
-MQTT_PASS         = os.getenv("MQTT_PASS", "changeme")
+MQTT_BROKER    = os.getenv("MQTT_BROKER", "localhost")
+MQTT_PORT      = int(os.getenv("MQTT_PORT", 1883))
+MQTT_USER      = os.getenv("MQTT_USER", "guardian")
+MQTT_PASS      = os.getenv("MQTT_PASS", "changeme")
+TOTP_SECRET    = os.getenv("TOTP_SECRET", "YOUR_BASE32_SECRET_HERE")
+MASTER_PASSWORD = os.getenv("MASTER_PASSWORD", "changeme")
+NUKE_PASSPHRASE = os.getenv("NUKE_PASSPHRASE", "changeme-nuke-phrase")
+NTFY_TOPIC     = os.getenv("NTFY_TOPIC", "guardian-changeme")
+NTFY_URL       = f"https://ntfy.sh/{NTFY_TOPIC}"
+COMMAND_TTL    = int(os.getenv("COMMAND_TTL", 300))   # seconds
+NUKE_COUNTDOWN = int(os.getenv("NUKE_COUNTDOWN", 600)) # 10 minutes
 
-TOTP_SECRET       = os.getenv("TOTP_SECRET", "YOUR_BASE32_SECRET_HERE")
-MASTER_PASSWORD   = os.getenv("MASTER_PASSWORD", "changeme")
-NUKE_PASSPHRASE   = os.getenv("NUKE_PASSPHRASE", "changeme-nuke-phrase")
-
-NTFY_TOPIC        = os.getenv("NTFY_TOPIC", "guardian-changeme")
-NTFY_URL          = f"https://ntfy.sh/{NTFY_TOPIC}"
-
-COMMAND_TTL       = int(os.getenv("COMMAND_TTL", 300))    # seconds
-NUKE_COUNTDOWN    = int(os.getenv("NUKE_COUNTDOWN", 600))  # 10 minutes
+# CORS: restrict to your dashboard origin.
+# Set DASHBOARD_ORIGIN env var to your actual URL, e.g. https://dashboard.yourdomain.com
+# Leave empty only during local development.
+DASHBOARD_ORIGIN = os.getenv("DASHBOARD_ORIGIN", "")
+CORS_ORIGINS = [DASHBOARD_ORIGIN] if DASHBOARD_ORIGIN else []
 
 # ─── STATE ─────────────────────────────────────────────────────────────────────
-device_status: Dict[str, dict] = {}
+device_status: Dict[str, dict]   = {}
 pending_commands: Dict[str, list] = {}
-nuke_state: Dict[str, dict] = {}  # device_id -> {active, started_at, aborted}
-location_log: Dict[str, list] = {}
+nuke_state: Dict[str, dict]      = {}  # device_id -> {active, started_at, aborted}
+location_log: Dict[str, list]    = {}
 
 # ─── TOTP ───────────────────────────────────────────────────────────────────────
 def verify_totp(secret: str, token: str, window: int = 1) -> bool:
@@ -113,7 +114,7 @@ def on_message(client, userdata, msg):
         })
         location_log[device_id] = location_log[device_id][-50:]
     elif msg_type == "ack":
-        cmd = payload.get("command")
+        cmd    = payload.get("command")
         status = payload.get("status")
         if cmd == "wipe_complete":
             if device_id in nuke_state:
@@ -165,7 +166,7 @@ async def nuke_countdown_task(device_id: str):
             )
             nuke_state[device_id]["executed"] = True
             await ntfy_alert(
-                title=f"🔥 WIPE EXECUTED — {device_id}",
+                title=f"WIPE EXECUTED -- {device_id}",
                 message=f"Guardian wiped {device_id} at {datetime.now(timezone.utc).isoformat()}",
                 priority="urgent", tags="fire,skull",
             )
@@ -173,7 +174,14 @@ async def nuke_countdown_task(device_id: str):
 
 # ─── FASTAPI ────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Guardian Relay v2", version="2.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
+)
 
 @app.on_event("startup")
 async def startup():
@@ -182,13 +190,13 @@ async def startup():
 # ─── MODELS ─────────────────────────────────────────────────────────────────────
 class CommandRequest(BaseModel):
     device_id: str
-    command: str
-    params: Optional[dict] = {}
+    command:   str
+    params:    Optional[dict] = {}
 
 class NukeInitRequest(BaseModel):
     device_id: str
-    step: int
-    value: str
+    step:      int
+    value:     str
 
 class NukeAbortRequest(BaseModel):
     device_id: str
@@ -247,7 +255,7 @@ async def nuke_init(req: NukeInitRequest):
         nuke_sessions.pop(device_id, None)
         asyncio.create_task(nuke_countdown_task(device_id))
         await ntfy_alert(
-            title=f"⚠️ NUKE ARMED — {device_id}",
+            title=f"NUKE ARMED -- {device_id}",
             message=f"10-minute countdown started for {device_id}. Abort from dashboard if needed.",
             priority="urgent", tags="rotating_light,bomb",
         )
@@ -264,7 +272,7 @@ async def nuke_abort(req: NukeAbortRequest):
         raise HTTPException(status_code=409, detail="Wipe already executed")
     nuke_state[req.device_id]["aborted"] = True
     await ntfy_alert(
-        title=f"✅ NUKE ABORTED — {req.device_id}",
+        title=f"NUKE ABORTED -- {req.device_id}",
         message=f"Wipe countdown aborted for {req.device_id}.",
         priority="default", tags="white_check_mark",
     )
@@ -275,10 +283,12 @@ async def nuke_status(device_id: str):
     state = nuke_state.get(device_id)
     if not state:
         return {"active": False}
-    elapsed = time.time() - state["started_at"]
+    elapsed   = time.time() - state["started_at"]
     remaining = max(0, NUKE_COUNTDOWN - elapsed)
     return {
-        "active": state["active"], "aborted": state["aborted"],
-        "executed": state.get("executed", False),
-        "remaining_seconds": int(remaining), "countdown_seconds": NUKE_COUNTDOWN,
+        "active":           state["active"],
+        "aborted":          state["aborted"],
+        "executed":         state.get("executed", False),
+        "remaining_seconds": int(remaining),
+        "countdown_seconds": NUKE_COUNTDOWN,
     }
