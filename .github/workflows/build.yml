@@ -32,7 +32,7 @@ jobs:
             --onefile `
             --noconsole `
             --name guardian_windows_agent `
-            guardian_windows_agent.py
+            guardian_agent.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
