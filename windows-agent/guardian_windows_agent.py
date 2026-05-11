@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-Guardian Windows Agent v2.2.0
-Command TTL, location burst, abort dialog, silent recovery-mode wipe.
+Guardian Windows Agent v2.2.1
+Command TTL, location burst, abort dialog, silent recovery-mode wipe,
+remote abort_wipe command.
 
 Wipe method (v2.1+):
   Uses reagentc /boottore + ResetConfig.xml to trigger a silent, unattended
   factory reset on next boot — the user cannot cancel this from the lock screen.
   Falls back to systemreset.exe -factoryreset if reagentc is not available
   (e.g. WinRE is disabled or older Windows versions).
+
+Changes in v2.2.1:
+- Add 'abort_wipe' command handler: sets a thread-safe flag that the running
+  wipe countdown checks before executing, allowing the relay/dashboard to cancel
+  a wipe that is in its local abort-dialog window.
 
 Changes in v2.2.0:
 - Add WG_IP env var (GUARDIAN_WG_IP) and include wg_ip in status payload
@@ -50,6 +56,9 @@ log = logging.getLogger("guardian-win")
 client = mqtt.Client(client_id=f"guardian-win-{DEVICE_ID}", clean_session=False)
 client.username_pw_set(MQTT_USER, MQTT_PASS)
 
+# Thread-safe flag: set to True by 'abort_wipe' command to cancel a running wipe.
+_wipe_abort_flag = threading.Event()
+
 def get_location():
     try:
         with urllib.request.urlopen("https://ipapi.co/json/", timeout=5) as r:
@@ -59,8 +68,6 @@ def get_location():
                 "lon":    d.get("longitude", 0),
                 "city":   d.get("city",      ""),
                 "isp":    d.get("org",        ""),
-                # NOTE: IP geolocation only — inaccurate on VPNs/corporate networks.
-                # GPS/Wi-Fi triangulation is not available on Windows agents.
                 "method": "ip",
             }
     except Exception as e:
@@ -83,7 +90,7 @@ def send_status():
         "platform":      "windows",
         "os_version":    platform.version(),
         "hostname":      platform.node(),
-        "agent_version": "2.2.0",
+        "agent_version": "2.2.1",
         "ts":            time.time(),
     }
     if WG_IP:
@@ -111,7 +118,6 @@ def abort_dialog(seconds):
     return False
 
 def _winre_available() -> bool:
-    """Return True if Windows Recovery Environment is enabled and reagentc is present."""
     reagentc = shutil.which("reagentc")
     if not reagentc:
         return False
@@ -124,13 +130,6 @@ def _winre_available() -> bool:
         return False
 
 def _write_reset_config():
-    """
-    Write a ResetConfig.xml that instructs WinRE to perform a fully unattended
-    'Remove everything' reset without user interaction.
-
-    Path: %SystemRoot%\\System32\\Recovery\\ResetConfig.xml
-    This file is read by WinRE during the recovery boot.
-    """
     config_dir  = Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / "Recovery"
     config_path = config_dir / "ResetConfig.xml"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -147,7 +146,6 @@ def _write_reset_config():
   </Provisioning>
   <UnattendXML/>
   <DriverPaths/>
-  <!-- Fully unattended: no user prompts during reset -->
   <ResetPlatformType>FactoryReset</ResetPlatformType>
 </Reset>
 """
@@ -155,14 +153,6 @@ def _write_reset_config():
     log.info(f"ResetConfig.xml written to {config_path}")
 
 def wipe_windows():
-    """
-    Attempt a silent, unattended wipe via WinRE (reagentc /boottore).
-    This schedules a recovery-mode factory reset on next boot and immediately
-    reboots the machine — the user cannot cancel from the lock screen.
-
-    Falls back to systemreset.exe -factoryreset (cancellable GUI wizard) if
-    WinRE is not available.
-    """
     log.warning("Wipe initiating")
     client.publish(
         f"guardian/{DEVICE_ID}/ack",
@@ -185,7 +175,6 @@ def wipe_windows():
         except Exception as e:
             log.error(f"reagentc wipe failed: {e} — falling back to systemreset")
 
-    # Fallback: GUI reset wizard (user may be able to cancel at keyboard)
     log.warning("Wipe method: systemreset.exe (fallback — cancellable by user at keyboard)")
     subprocess.Popen(
         ["systemreset.exe", "-factoryreset"],
@@ -201,6 +190,7 @@ def handle_command(payload):
         log.warning(f"Command '{command}' expired ({age:.0f}s). Ignored.")
         return
     log.info(f"Command: {command} (age={age:.1f}s)")
+
     if command == "ping":
         client.publish(
             f"guardian/{DEVICE_ID}/ack",
@@ -220,9 +210,21 @@ def handle_command(payload):
             json.dumps({"command": "lock", "status": "ok", "ts": time.time()}),
             qos=1,
         )
+    elif command == "abort_wipe":
+        # Signal any running wipe countdown to cancel before execution.
+        _wipe_abort_flag.set()
+        log.warning("abort_wipe received — wipe abort flag set")
+        client.publish(
+            f"guardian/{DEVICE_ID}/ack",
+            json.dumps({"command": "abort_wipe", "status": "flag_set", "ts": time.time()}),
+            qos=1,
+        )
     elif command == "wipe":
         def do_wipe():
-            if abort_dialog(ABORT_WINDOW):
+            _wipe_abort_flag.clear()  # reset flag for this wipe attempt
+            if abort_dialog(ABORT_WINDOW) or _wipe_abort_flag.is_set():
+                log.warning("Wipe aborted (local dialog or remote abort_wipe)")
+                _wipe_abort_flag.clear()
                 client.publish(
                     f"guardian/{DEVICE_ID}/ack",
                     json.dumps({"command": "wipe_complete", "status": "aborted_locally", "ts": time.time()}),
@@ -233,6 +235,8 @@ def handle_command(payload):
             time.sleep(5)
             wipe_windows()
         threading.Thread(target=do_wipe, daemon=True).start()
+    else:
+        log.warning(f"Unknown command: {command!r}")
 
 client.on_connect = lambda c, u, f, rc: (
     log.info(f"MQTT rc={rc}"),
@@ -255,7 +259,7 @@ def heartbeat():
         time.sleep(60)
 
 if __name__ == "__main__":
-    log.info(f"Guardian Windows Agent v2.2.0 — {DEVICE_ID}")
+    log.info(f"Guardian Windows Agent v2.2.1 — {DEVICE_ID}")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     threading.Thread(target=heartbeat, daemon=True).start()
     client.loop_forever(retry_first_connection=True)

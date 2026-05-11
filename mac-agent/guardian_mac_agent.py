@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Guardian Mac Agent v2.2.0
+Guardian Mac Agent v2.2.1
 Wipe method: Full erase + reinstall macOS (Option A)
 Runs as a LaunchDaemon (root). Survives login/logout.
+
+Changes in v2.2.1:
+- Add 'abort_wipe' command handler: sets a thread-safe threading.Event flag
+  that the running do_wipe() goroutine checks before calling wipe_mac(),
+  allowing the relay/dashboard to remotely cancel a countdown in progress.
 
 Changes in v2.2.0:
 - Add WG_IP env var (GUARDIAN_WG_IP) and include wg_ip in status payload
   so the dashboard can display the WireGuard IP for this device
 
 Changes in v2.1.0:
-- fix: get_location() no longer spawns a subprocess-inside-python subprocess;
-  uses urllib.request directly (same approach as Windows agent)
+- fix: get_location() no longer spawns a subprocess-inside-python subprocess
 - fix: lock command replaces hard-coded CGSession path (broken on macOS 13+ Ventura)
   with cascading fallback: pmset displaysleepnow -> osascript -> CGSession legacy
 - fix: nvram fallback in wipe_mac() guarded with os.path.exists; Apple Silicon
@@ -39,14 +43,11 @@ log = logging.getLogger("guardian-mac")
 client = mqtt.Client(client_id=f"guardian-mac-{DEVICE_ID}", clean_session=False)
 client.username_pw_set(MQTT_USER, MQTT_PASS)
 
+# Thread-safe flag: set to True by 'abort_wipe' command to cancel a running wipe.
+_wipe_abort_flag = threading.Event()
+
 
 def get_location() -> dict:
-    """
-    FIX (v2.1.0): previously called subprocess.run(["python3", "-c", ...]) which spawned
-    a child python3 process inside the running python3 process. That approach
-    fails if 'python3' is not on PATH for the LaunchDaemon environment.
-    Now calls urllib.request directly in-process.
-    """
     try:
         with urllib.request.urlopen("https://ipapi.co/json/", timeout=7) as resp:
             data = json.loads(resp.read().decode())
@@ -81,24 +82,16 @@ def location_burst(count: int = 5, interval: float = 2.0):
 
 def lock_mac() -> bool:
     """
-    FIX (v2.1.0): CGSession path hard-coded to Menu Extras/User.menu is broken on
-    macOS 13 Ventura and later (path no longer exists).
-
-    Cascading fallback strategy:
-      1. pmset displaysleepnow       -- reliable on Ventura+, dims + locks if
-                                        "Require password immediately" is set
-      2. osascript screensaver       -- activates screen saver which triggers lock
-      3. CGSession -suspend (legacy) -- kept for Intel Macs on Monterey and earlier
-
-    Returns True if any method succeeded (rc=0).
+    Cascading fallback strategy (Ventura-safe):
+      1. pmset displaysleepnow
+      2. osascript screensaver
+      3. CGSession -suspend (legacy, pre-Ventura)
     """
-    # Method 1: pmset (Ventura-safe, most reliable when run as root)
     r = subprocess.run(["pmset", "displaysleepnow"], capture_output=True)
     if r.returncode == 0:
         log.info("Lock: pmset displaysleepnow OK")
         return True
 
-    # Method 2: osascript screensaver activation
     script = ('tell application "System Events" to '
                'tell process "loginwindow" to '
                'key code 12 using {control down, command down}')
@@ -107,7 +100,6 @@ def lock_mac() -> bool:
         log.info("Lock: osascript OK")
         return True
 
-    # Method 3: CGSession legacy (pre-Ventura)
     cgsession = ("/System/Library/CoreServices/Menu Extras/User.menu"
                  "/Contents/Resources/CGSession")
     if os.path.exists(cgsession):
@@ -146,7 +138,6 @@ def wipe_mac():
             )
             return
 
-    # FIX (v2.1.0): nvram path guard + Apple Silicon bless fallback
     log.warning("Installer not found -- attempting recovery reboot")
     nvram = "/usr/sbin/nvram"
     if os.path.exists(nvram):
@@ -209,9 +200,21 @@ def handle_command(payload: dict):
             json.dumps({"command": "lock", "status": "ok" if ok else "failed", "ts": time.time()}),
             qos=1,
         )
+    elif command == "abort_wipe":
+        # Signal any running wipe countdown to cancel before execution.
+        _wipe_abort_flag.set()
+        log.warning("abort_wipe received — wipe abort flag set")
+        client.publish(
+            f"guardian/{DEVICE_ID}/ack",
+            json.dumps({"command": "abort_wipe", "status": "flag_set", "ts": time.time()}),
+            qos=1,
+        )
     elif command == "wipe":
         def do_wipe():
-            if show_abort_window(ABORT_WINDOW):
+            _wipe_abort_flag.clear()  # reset flag for this wipe attempt
+            if show_abort_window(ABORT_WINDOW) or _wipe_abort_flag.is_set():
+                log.warning("Wipe aborted (local dialog or remote abort_wipe)")
+                _wipe_abort_flag.clear()
                 client.publish(
                     f"guardian/{DEVICE_ID}/ack",
                     json.dumps({"command": "wipe_complete", "status": "aborted_locally", "ts": time.time()}),
@@ -231,7 +234,7 @@ def send_status():
         "platform":      "mac",
         "os_version":    platform.mac_ver()[0],
         "hostname":      platform.node(),
-        "agent_version": "2.2.0",
+        "agent_version": "2.2.1",
         "ts":            time.time(),
     }
     if WG_IP:
@@ -266,7 +269,7 @@ def heartbeat():
 
 
 if __name__ == "__main__":
-    log.info(f"Guardian Mac Agent v2.2.0 -- {DEVICE_ID}")
+    log.info(f"Guardian Mac Agent v2.2.1 -- {DEVICE_ID}")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     threading.Thread(target=heartbeat, daemon=True).start()
     client.loop_forever(retry_first_connection=True)

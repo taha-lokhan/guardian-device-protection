@@ -46,3 +46,8 @@ Endpoint = $SERVER_IP:51820
 AllowedIPs = 10.99.0.0/24
 PersistentKeepalive = 25
 WGCONF
+
+echo ""
+echo "--- Set this env var on the enrolled device so the dashboard shows its IP ---"
+echo "  export GUARDIAN_WG_IP=$DEVICE_IP"
+echo "  (add to /etc/environment, the LaunchDaemon plist, or the Windows service env)"
