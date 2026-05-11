@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """
-Guardian Relay Server v2.1
+Guardian Relay Server v2.2.0
 FastAPI + MQTT relay with nuke system, TOTP auth, ntfy.sh alerts, command TTL
 
-Changes in v2.1:
-- SQLite persistence for device_status, location_log, nuke_state
-- Nuke init rate limiting: 5 failed attempts per device locks out for 5 minutes
-- Stale nuke_state cleanup: executed/aborted states purged after NUKE_STATE_TTL seconds
-- Fixed nuke session expiry not clearing stale nuke_state entries
-- Windows agent wipe note added in comments
+Changes in v2.2.0:
+- TOTP replay protection: used tokens tracked in totp_used table; same code
+  rejected if presented again within the same 30-second TOTP window
+- lifespan migration: replaced deprecated @app.on_event('startup') with
+  asynccontextmanager lifespan (FastAPI >= 0.93 best practice)
+- asyncio.get_running_loop(): _resume_nuke_countdowns now receives the running
+  loop as a parameter instead of calling the deprecated get_event_loop()
+- device_id path injection guard: all routes validate device_id against
+  [A-Za-z0-9_-] before using it in MQTT topic paths
+- CORS hardening: startup assertion fails loudly if DASHBOARD_ORIGIN is unset
 """
 import asyncio
 import json
 import os
+import re
 import time
 import hashlib
 import hmac
@@ -22,8 +27,9 @@ import threading
 import uuid
 import sqlite3
 import contextlib
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional, Dict
+from typing import Optional
 import paho.mqtt.client as mqtt
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,26 +47,34 @@ MASTER_PASSWORD = os.getenv("MASTER_PASSWORD", "changeme")
 NUKE_PASSPHRASE = os.getenv("NUKE_PASSPHRASE", "changeme-nuke-phrase")
 NTFY_TOPIC      = os.getenv("NTFY_TOPIC",      "guardian-changeme")
 NTFY_URL        = f"https://ntfy.sh/{NTFY_TOPIC}"
-COMMAND_TTL     = int(os.getenv("COMMAND_TTL",    300))   # seconds
-NUKE_COUNTDOWN  = int(os.getenv("NUKE_COUNTDOWN", 600))   # 10 minutes
-NUKE_STATE_TTL  = int(os.getenv("NUKE_STATE_TTL", 3600))  # purge executed/aborted after 1h
+COMMAND_TTL     = int(os.getenv("COMMAND_TTL",    300))
+NUKE_COUNTDOWN  = int(os.getenv("NUKE_COUNTDOWN", 600))
+NUKE_STATE_TTL  = int(os.getenv("NUKE_STATE_TTL", 3600))
 DB_PATH         = os.getenv("GUARDIAN_DB",     "guardian.db")
 
-# Rate limiting: max failed nuke init attempts before lockout
 NUKE_MAX_FAILS    = int(os.getenv("NUKE_MAX_FAILS",    5))
-NUKE_LOCKOUT_SECS = int(os.getenv("NUKE_LOCKOUT_SECS", 300))  # 5 minutes
+NUKE_LOCKOUT_SECS = int(os.getenv("NUKE_LOCKOUT_SECS", 300))
 
-# CORS: restrict to your dashboard origin.
 DASHBOARD_ORIGIN = os.getenv("DASHBOARD_ORIGIN", "")
 CORS_ORIGINS     = [DASHBOARD_ORIGIN] if DASHBOARD_ORIGIN else []
+
+# ─── INPUT VALIDATION ─────────────────────────────────────────────────────────
+_SAFE_DEVICE_ID = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+
+def _validate_device_id(device_id: str) -> str:
+    """Guard against path injection in MQTT topic construction."""
+    if not _SAFE_DEVICE_ID.match(device_id):
+        raise HTTPException(
+            status_code=400,
+            detail="device_id must be 1-64 characters: letters, digits, hyphens, underscores only",
+        )
+    return device_id
 
 # ─── DATABASE ──────────────────────────────────────────────────────────────────
 def get_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
-
-_db_lock = threading.Lock()
 
 @contextlib.contextmanager
 def db_conn():
@@ -116,6 +130,15 @@ def init_db():
                 locked_until REAL NOT NULL DEFAULT 0
             )
         """)
+        # FIX: TOTP replay protection table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS totp_used (
+                token_hash TEXT NOT NULL,
+                window_ts  INTEGER NOT NULL,
+                used_at    REAL NOT NULL,
+                PRIMARY KEY (token_hash, window_ts)
+            )
+        """)
 
 # ─── DB HELPERS ────────────────────────────────────────────────────────────────
 def db_upsert_device(device_id: str, payload: dict):
@@ -139,7 +162,6 @@ def db_append_location(device_id: str, payload: dict):
             "INSERT INTO location_log(device_id, payload, recorded_at) VALUES(?,?,?)",
             (device_id, json.dumps(payload), now),
         )
-        # Keep only the last 50 entries per device
         conn.execute(
             "DELETE FROM location_log WHERE device_id=? AND id NOT IN "
             "(SELECT id FROM location_log WHERE device_id=? ORDER BY id DESC LIMIT 50)",
@@ -187,7 +209,6 @@ def db_get_nuke_state(device_id: str) -> Optional[dict]:
     }
 
 def db_purge_stale_nuke_states():
-    """Remove nuke states that are completed/aborted and older than NUKE_STATE_TTL."""
     cutoff = time.time() - NUKE_STATE_TTL
     with db_conn() as conn:
         conn.execute(
@@ -218,7 +239,6 @@ def db_delete_nuke_session(device_id: str):
 
 # ─── RATE LIMITING ─────────────────────────────────────────────────────────────
 def check_nuke_ratelimit(device_id: str):
-    """Raise HTTPException if device is locked out. Returns current fail count."""
     with db_conn() as conn:
         row = conn.execute(
             "SELECT fail_count, locked_until FROM nuke_fails WHERE device_id=?", (device_id,)
@@ -234,7 +254,6 @@ def check_nuke_ratelimit(device_id: str):
     return row["fail_count"]
 
 def record_nuke_fail(device_id: str):
-    """Increment fail counter. Lock out after NUKE_MAX_FAILS."""
     with db_conn() as conn:
         row = conn.execute(
             "SELECT fail_count FROM nuke_fails WHERE device_id=?", (device_id,)
@@ -248,23 +267,48 @@ def record_nuke_fail(device_id: str):
         )
 
 def reset_nuke_fails(device_id: str):
-    """Clear fail counter after successful nuke step."""
     with db_conn() as conn:
         conn.execute("DELETE FROM nuke_fails WHERE device_id=?", (device_id,))
 
 # ─── TOTP ───────────────────────────────────────────────────────────────────────
 def verify_totp(secret: str, token: str, window: int = 1) -> bool:
+    """
+    Verify a TOTP code and prevent replay attacks.
+    Each (token_hash, window_ts) pair can only be used once.
+    Used entries are purged after 120 seconds.
+    """
     try:
         key = base64.b32decode(secret.upper())
     except Exception:
         return False
     ts = int(time.time()) // 30
+    token_str = str(token).zfill(6)
     for offset in range(-window, window + 1):
         t = struct.pack(">Q", ts + offset)
         h = hmac.new(key, t, hashlib.sha1).digest()
         o = h[-1] & 0x0F
         code = struct.unpack(">I", h[o:o+4])[0] & 0x7FFFFFFF
-        if str(code % 1_000_000).zfill(6) == str(token).zfill(6):
+        if str(code % 1_000_000).zfill(6) == token_str:
+            window_ts = ts + offset
+            # FIX: replay protection — hash (token + window_ts) to make the key
+            entry_hash = hashlib.sha256(f"{token_str}:{window_ts}".encode()).hexdigest()
+            with db_conn() as conn:
+                existing = conn.execute(
+                    "SELECT 1 FROM totp_used WHERE token_hash=? AND window_ts=?",
+                    (entry_hash, window_ts),
+                ).fetchone()
+                if existing:
+                    # Same code already consumed in this window — replay rejected
+                    return False
+                conn.execute(
+                    "INSERT INTO totp_used(token_hash, window_ts, used_at) VALUES(?,?,?)",
+                    (entry_hash, window_ts, time.time()),
+                )
+                # Purge entries older than 120 seconds (> 2 full TOTP windows)
+                conn.execute(
+                    "DELETE FROM totp_used WHERE used_at < ?",
+                    (time.time() - 120,),
+                )
             return True
     return False
 
@@ -305,6 +349,11 @@ def on_message(client, userdata, msg):
     device_id = parts[1]
     msg_type  = parts[2]
 
+    # Guard: only process messages from devices with safe IDs
+    if not _SAFE_DEVICE_ID.match(device_id):
+        print(f"[MQTT] Dropping message from unsafe device_id: {device_id!r}")
+        return
+
     if msg_type == "status":
         enriched = {
             **payload,
@@ -316,7 +365,7 @@ def on_message(client, userdata, msg):
     elif msg_type == "location":
         db_append_location(device_id, {
             **payload,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
         })
 
     elif msg_type == "ack":
@@ -324,7 +373,7 @@ def on_message(client, userdata, msg):
         status = payload.get("status")
         if cmd == "wipe_complete":
             state = db_get_nuke_state(device_id)
-            if state:
+            if state and not state.get("aborted"):
                 state["executed"] = True
                 db_upsert_nuke_state(device_id, state)
         print(f"[ACK] {device_id} -> {cmd}: {status}")
@@ -351,7 +400,6 @@ async def ntfy_alert(title: str, message: str, priority: str = "urgent", tags: s
 
 # ─── NUKE COUNTDOWN TASK ────────────────────────────────────────────────────────
 async def nuke_countdown_task(device_id: str):
-    started_at = time.time()
     while True:
         await asyncio.sleep(5)
         state = db_get_nuke_state(device_id)
@@ -361,7 +409,7 @@ async def nuke_countdown_task(device_id: str):
             print(f"[NUKE] Aborted for {device_id}")
             return
         elapsed = time.time() - state["started_at"]
-        if elapsed >= NUKE_COUNTDOWN:
+        if elapsed >= state["countdown_seconds"]:
             print(f"[NUKE] Executing wipe for {device_id}")
             mqtt_client.publish(
                 f"guardian/{device_id}/command",
@@ -377,14 +425,53 @@ async def nuke_countdown_task(device_id: str):
             state["executed"] = True
             db_upsert_nuke_state(device_id, state)
             await ntfy_alert(
-                title=f"WIPE EXECUTED -- {device_id}",
+                title=f"WIPE EXECUTED — {device_id}",
                 message=f"Guardian wiped {device_id} at {datetime.now(timezone.utc).isoformat()}",
                 priority="urgent", tags="fire,skull",
             )
             return
 
+# ─── LIFESPAN ───────────────────────────────────────────────────────────────────
+def _resume_nuke_countdowns(loop: asyncio.AbstractEventLoop):
+    """
+    On startup, restart countdown tasks for any nukes active when the server was killed.
+    Receives the running event loop explicitly instead of calling the deprecated
+    asyncio.get_event_loop().
+    """
+    with db_conn() as conn:
+        rows = conn.execute(
+            "SELECT device_id, started_at, countdown_secs FROM nuke_state "
+            "WHERE active=1 AND aborted=0 AND executed=0"
+        ).fetchall()
+    for row in rows:
+        elapsed   = time.time() - row["started_at"]
+        remaining = row["countdown_secs"] - elapsed
+        if remaining > 0:
+            print(f"[NUKE] Resuming countdown for {row['device_id']} — {remaining:.0f}s remaining")
+        else:
+            print(f"[NUKE] Countdown expired during downtime for {row['device_id']} — executing immediately")
+        loop.create_task(nuke_countdown_task(row["device_id"]))
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    if not DASHBOARD_ORIGIN:
+        print("[WARN] DASHBOARD_ORIGIN is not set — CORS will block all browser requests. "
+              "Set DASHBOARD_ORIGIN in your .env file.")
+    init_db()
+    db_purge_stale_nuke_states()
+    mqtt_connect()
+    # FIX: use get_running_loop() instead of deprecated get_event_loop()
+    loop = asyncio.get_running_loop()
+    _resume_nuke_countdowns(loop)
+    yield
+    # Shutdown
+    mqtt_client.loop_stop()
+    mqtt_client.disconnect()
+    print("[MQTT] Disconnected cleanly on shutdown")
+
 # ─── FASTAPI ────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Guardian Relay v2.1", version="2.1.0")
+app = FastAPI(title="Guardian Relay", version="2.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -393,32 +480,6 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
-@app.on_event("startup")
-async def startup():
-    init_db()
-    db_purge_stale_nuke_states()
-    mqtt_connect()
-    # Resume any nuke countdowns that were active before restart
-    _resume_nuke_countdowns()
-
-def _resume_nuke_countdowns():
-    """On startup, restart countdown tasks for any nukes that were active when server was killed."""
-    with db_conn() as conn:
-        rows = conn.execute(
-            "SELECT device_id, started_at, countdown_secs FROM nuke_state "
-            "WHERE active=1 AND aborted=0 AND executed=0"
-        ).fetchall()
-    for row in rows:
-        elapsed  = time.time() - row["started_at"]
-        remaining = row["countdown_secs"] - elapsed
-        if remaining > 0:
-            print(f"[NUKE] Resuming countdown for {row['device_id']} — {remaining:.0f}s remaining")
-            asyncio.get_event_loop().create_task(nuke_countdown_task(row["device_id"]))
-        else:
-            # Countdown already expired — fire immediately
-            print(f"[NUKE] Countdown expired during downtime for {row['device_id']} — executing")
-            asyncio.get_event_loop().create_task(nuke_countdown_task(row["device_id"]))
 
 # ─── MODELS ─────────────────────────────────────────────────────────────────────
 class CommandRequest(BaseModel):
@@ -437,7 +498,7 @@ class NukeAbortRequest(BaseModel):
 # ─── ROUTES ─────────────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "2.1.0", "time": datetime.now(timezone.utc).isoformat()}
+    return {"status": "ok", "version": "2.2.0", "time": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/devices", dependencies=[Depends(require_auth)])
 async def get_devices():
@@ -445,12 +506,14 @@ async def get_devices():
 
 @app.get("/devices/{device_id}/location", dependencies=[Depends(require_auth)])
 async def get_location(device_id: str):
+    _validate_device_id(device_id)
     return {"locations": db_get_locations(device_id)}
 
 @app.post("/command", dependencies=[Depends(require_auth)])
 async def send_command(req: CommandRequest):
+    _validate_device_id(req.device_id)
     payload = {
-        "command": req.command, "params": req.params,
+        "command": req.command, "params": req.params or {},
         "issued_at": time.time(), "ttl": COMMAND_TTL, "id": str(uuid.uuid4()),
     }
     mqtt_client.publish(f"guardian/{req.device_id}/command", json.dumps(payload), qos=1)
@@ -460,8 +523,7 @@ async def send_command(req: CommandRequest):
 @app.post("/nuke/init", dependencies=[Depends(require_auth)])
 async def nuke_init(req: NukeInitRequest):
     device_id = req.device_id
-
-    # Rate limit check before any validation
+    _validate_device_id(device_id)
     check_nuke_ratelimit(device_id)
 
     if req.step == 1:
@@ -504,7 +566,7 @@ async def nuke_init(req: NukeInitRequest):
         db_upsert_nuke_state(device_id, state)
         asyncio.create_task(nuke_countdown_task(device_id))
         await ntfy_alert(
-            title=f"NUKE ARMED -- {device_id}",
+            title=f"NUKE ARMED — {device_id}",
             message=f"10-minute countdown started for {device_id}. Abort from dashboard if needed.",
             priority="urgent", tags="rotating_light,bomb",
         )
@@ -518,15 +580,18 @@ async def nuke_init(req: NukeInitRequest):
 
 @app.post("/nuke/abort", dependencies=[Depends(require_auth)])
 async def nuke_abort(req: NukeAbortRequest):
+    _validate_device_id(req.device_id)
     state = db_get_nuke_state(req.device_id)
     if not state or not state.get("active"):
         raise HTTPException(status_code=404, detail="No active nuke for this device")
     if state.get("executed"):
-        raise HTTPException(status_code=409, detail="Wipe already executed")
+        raise HTTPException(status_code=409, detail="Wipe already executed — cannot abort")
+    if state.get("aborted"):
+        return {"status": "already_aborted"}
     state["aborted"] = True
     db_upsert_nuke_state(req.device_id, state)
     await ntfy_alert(
-        title=f"NUKE ABORTED -- {req.device_id}",
+        title=f"NUKE ABORTED — {req.device_id}",
         message=f"Wipe countdown aborted for {req.device_id}.",
         priority="default", tags="white_check_mark",
     )
@@ -534,6 +599,7 @@ async def nuke_abort(req: NukeAbortRequest):
 
 @app.get("/nuke/status/{device_id}", dependencies=[Depends(require_auth)])
 async def nuke_status(device_id: str):
+    _validate_device_id(device_id)
     state = db_get_nuke_state(device_id)
     if not state:
         return {"active": False}
