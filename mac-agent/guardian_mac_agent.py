@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
 """
-Guardian Mac Agent v2.0
+Guardian Mac Agent v2.1.0
 Wipe method: Full erase + reinstall macOS (Option A)
 Runs as a LaunchDaemon (root). Survives login/logout.
-"""
 
+Changes in v2.1.0:
+- fix: get_location() no longer spawns a subprocess-inside-python subprocess;
+  uses urllib.request directly (same approach as Windows agent)
+- fix: lock command replaces hard-coded CGSession path (broken on macOS 13+ Ventura)
+  with cascading fallback: pmset displaysleepnow -> osascript -> CGSession legacy
+- fix: nvram fallback in wipe_mac() guarded with os.path.exists; Apple Silicon
+  boot argument set via bless --nextonly --legacyboot as alternative path
+- version: 2.1.0
+"""
 import json, os, sys, time, subprocess, threading, logging, platform
+import urllib.request
 import paho.mqtt.client as mqtt
 
 MQTT_BROKER   = os.getenv("GUARDIAN_BROKER", "YOUR_VPS_IP")
@@ -26,38 +35,96 @@ log = logging.getLogger("guardian-mac")
 client = mqtt.Client(client_id=f"guardian-mac-{DEVICE_ID}", clean_session=False)
 client.username_pw_set(MQTT_USER, MQTT_PASS)
 
-def get_location():
+
+def get_location() -> dict:
+    """
+    FIX: previously called subprocess.run(["python3", "-c", ...]) which spawned
+    a child python3 process inside the running python3 process. That approach
+    fails if 'python3' is not on PATH for the LaunchDaemon environment.
+    Now calls urllib.request directly in-process.
+    """
     try:
-        result = subprocess.run(
-            ["python3", "-c",
-             "import urllib.request,json; d=json.loads(urllib.request.urlopen('https://ipapi.co/json/',timeout=5).read()); print(d.get('latitude',0),d.get('longitude',0),d.get('city',''),d.get('org',''))"],
-            capture_output=True, text=True, timeout=10
-        )
-        parts = result.stdout.strip().split()
-        if len(parts) >= 2:
-            return {"lat": float(parts[0]), "lon": float(parts[1]),
-                    "city": parts[2] if len(parts)>2 else "", "method": "ip"}
+        with urllib.request.urlopen("https://ipapi.co/json/", timeout=7) as resp:
+            data = json.loads(resp.read().decode())
+        return {
+            "lat":    data.get("latitude", 0),
+            "lon":    data.get("longitude", 0),
+            "city":   data.get("city", ""),
+            "org":    data.get("org", ""),
+            "method": "ip",
+        }
     except Exception as e:
-        log.warning(f"Location: {e}")
+        log.warning(f"Location lookup failed: {e}")
     return {"lat": 0, "lon": 0, "method": "unknown"}
+
 
 def send_location():
     loc = get_location()
-    client.publish(f"guardian/{DEVICE_ID}/location",
-                   json.dumps({**loc, "device_id": DEVICE_ID, "ts": time.time()}), qos=1)
-    log.info(f"Location: {loc}")
+    client.publish(
+        f"guardian/{DEVICE_ID}/location",
+        json.dumps({**loc, "device_id": DEVICE_ID, "ts": time.time()}),
+        qos=1,
+    )
+    log.info(f"Location published: {loc}")
 
-def location_burst(count=5, interval=2.0):
+
+def location_burst(count: int = 5, interval: float = 2.0):
     log.info(f"Location burst x{count}")
     for _ in range(count):
         send_location()
         time.sleep(interval)
 
+
+def lock_mac() -> bool:
+    """
+    FIX: CGSession path hard-coded to Menu Extras/User.menu is broken on
+    macOS 13 Ventura and later (path no longer exists).
+
+    Cascading fallback strategy:
+      1. pmset displaysleepnow       — reliable on Ventura+, dims + locks if
+                                        "Require password immediately" is set
+      2. osascript screensaver       — activates screen saver which triggers lock
+      3. CGSession -suspend (legacy) — kept for Intel Macs on Monterey and earlier
+
+    Returns True if any method succeeded (rc=0).
+    """
+    # Method 1: pmset (Ventura-safe, most reliable when run as root)
+    r = subprocess.run(["pmset", "displaysleepnow"], capture_output=True)
+    if r.returncode == 0:
+        log.info("Lock: pmset displaysleepnow OK")
+        return True
+
+    # Method 2: osascript screensaver activation
+    script = ('tell application "System Events" to '
+               'tell process "loginwindow" to '
+               'key code 12 using {control down, command down}')
+    r = subprocess.run(["osascript", "-e", script], capture_output=True)
+    if r.returncode == 0:
+        log.info("Lock: osascript OK")
+        return True
+
+    # Method 3: CGSession legacy (pre-Ventura)
+    cgsession = ("/System/Library/CoreServices/Menu Extras/User.menu"
+                 "/Contents/Resources/CGSession")
+    if os.path.exists(cgsession):
+        r = subprocess.run([cgsession, "-suspend"], capture_output=True)
+        if r.returncode == 0:
+            log.info("Lock: CGSession OK")
+            return True
+
+    log.error("Lock: all methods failed")
+    return False
+
+
 def wipe_mac():
     log.warning("WIPE — Option A: eraseinstall")
-    client.publish(f"guardian/{DEVICE_ID}/ack",
-                   json.dumps({"command": "wipe_complete", "status": "initiating", "ts": time.time()}), qos=1)
+    client.publish(
+        f"guardian/{DEVICE_ID}/ack",
+        json.dumps({"command": "wipe_complete", "status": "initiating", "ts": time.time()}),
+        qos=1,
+    )
     time.sleep(2)
+
     installers = [
         "/Applications/Install macOS Sequoia.app/Contents/Resources/startosinstall",
         "/Applications/Install macOS Sonoma.app/Contents/Resources/startosinstall",
@@ -67,74 +134,133 @@ def wipe_mac():
     ]
     for installer in installers:
         if os.path.exists(installer):
-            log.warning(f"Using: {installer}")
-            subprocess.Popen([installer, "--eraseinstall", "--rebootdelay", "0",
-                              "--agreetolicense", "--nointeraction"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log.warning(f"Using installer: {installer}")
+            subprocess.Popen(
+                [installer, "--eraseinstall", "--rebootdelay", "0",
+                 "--agreetolicense", "--nointeraction"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
             return
-    log.warning("Installer not found — nvram recovery reboot")
-    subprocess.run(["nvram", "internet-recovery-mode=RecoveryModeDisk"], check=False)
-    subprocess.run(["reboot", "-n"], check=False)
 
-def show_abort_window(seconds):
-    script = f'tell application "System Events" to set r to button returned of (display dialog "\u26a0\ufe0f Guardian Wipe in {seconds}s\\nClick Abort to cancel." buttons {{"Abort"}} default button "Abort" with title "Guardian Security" giving up after {seconds})'
+    # FIX: nvram path guard + Apple Silicon bless fallback
+    log.warning("Installer not found — attempting recovery reboot")
+    nvram = "/usr/sbin/nvram"
+    if os.path.exists(nvram):
+        subprocess.run([nvram, "internet-recovery-mode=RecoveryModeDisk"], check=False)
+        subprocess.run(["reboot", "-n"], check=False)
+    else:
+        # Apple Silicon: use bless to force recovery on next boot
+        log.warning("nvram not found — attempting bless recovery (Apple Silicon)")
+        subprocess.run(
+            ["bless", "--mount", "/", "--setBoot", "--nextonly", "--legacyboot"],
+            check=False,
+        )
+        subprocess.run(["shutdown", "-r", "now"], check=False)
+
+
+def show_abort_window(seconds: int) -> bool:
+    script = (
+        f'tell application "System Events" to '
+        f'set r to button returned of (display dialog '
+        f'"\u26a0\ufe0f Guardian Wipe in {seconds}s\\nClick Abort to cancel." '
+        f'buttons {{"Abort"}} default button "Abort" '
+        f'with title "Guardian Security" giving up after {seconds})'
+    )
     try:
-        result = subprocess.run(["osascript", "-e", script],
-                                capture_output=True, text=True, timeout=seconds+5)
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=seconds + 5,
+        )
         return "abort" in result.stdout.lower()
     except Exception as e:
-        log.warning(f"Abort dialog: {e}")
+        log.warning(f"Abort dialog error: {e}")
     return False
 
-def handle_command(payload):
+
+def handle_command(payload: dict):
     command   = payload.get("command")
     issued_at = payload.get("issued_at", 0)
     ttl       = payload.get("ttl", 300)
     age = time.time() - issued_at
-    if age > ttl:
+    if issued_at > 0 and age > ttl:
         log.warning(f"Command '{command}' expired ({age:.0f}s > {ttl}s). Ignored.")
         return
     log.info(f"Command: {command} (age={age:.1f}s)")
+
     if command == "ping":
-        client.publish(f"guardian/{DEVICE_ID}/ack",
-                       json.dumps({"command": "ping", "status": "pong", "ts": time.time()}), qos=1)
-    elif command == "status":  send_status()
-    elif command == "location": send_location()
+        client.publish(
+            f"guardian/{DEVICE_ID}/ack",
+            json.dumps({"command": "ping", "status": "pong", "ts": time.time()}),
+            qos=1,
+        )
+    elif command == "status":
+        send_status()
+    elif command == "location":
+        send_location()
     elif command == "location_burst":
         threading.Thread(target=location_burst, daemon=True).start()
     elif command == "lock":
-        subprocess.run(["/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession", "-suspend"], check=False)
-        client.publish(f"guardian/{DEVICE_ID}/ack",
-                       json.dumps({"command": "lock", "status": "ok", "ts": time.time()}), qos=1)
+        ok = lock_mac()
+        client.publish(
+            f"guardian/{DEVICE_ID}/ack",
+            json.dumps({"command": "lock", "status": "ok" if ok else "failed", "ts": time.time()}),
+            qos=1,
+        )
     elif command == "wipe":
         def do_wipe():
             if show_abort_window(ABORT_WINDOW):
-                client.publish(f"guardian/{DEVICE_ID}/ack",
-                               json.dumps({"command": "wipe_complete", "status": "aborted_locally", "ts": time.time()}), qos=1)
+                client.publish(
+                    f"guardian/{DEVICE_ID}/ack",
+                    json.dumps({"command": "wipe_complete", "status": "aborted_locally", "ts": time.time()}),
+                    qos=1,
+                )
                 return
             location_burst(count=5, interval=1.5)
             wipe_mac()
         threading.Thread(target=do_wipe, daemon=True).start()
+    else:
+        log.warning(f"Unknown command: {command!r}")
+
 
 def send_status():
-    client.publish(f"guardian/{DEVICE_ID}/status", json.dumps({
-        "device_id": DEVICE_ID, "platform": "mac",
-        "os_version": platform.mac_ver()[0], "hostname": platform.node(),
-        "agent_version": "2.0.0", "ts": time.time(),
-    }), qos=1, retain=True)
+    client.publish(
+        f"guardian/{DEVICE_ID}/status",
+        json.dumps({
+            "device_id":     DEVICE_ID,
+            "platform":      "mac",
+            "os_version":    platform.mac_ver()[0],
+            "hostname":      platform.node(),
+            "agent_version": "2.1.0",
+            "ts":            time.time(),
+        }),
+        qos=1, retain=True,
+    )
 
-client.on_connect    = lambda c,u,f,rc: (log.info(f"MQTT rc={rc}"), c.subscribe(f"guardian/{DEVICE_ID}/command", qos=1), send_status())
-client.on_message    = lambda c,u,msg: threading.Thread(target=handle_command, args=(json.loads(msg.payload.decode()),), daemon=True).start()
-client.on_disconnect = lambda c,u,rc: log.warning(f"Disconnected rc={rc}")
+
+client.on_connect    = lambda c, u, f, rc: (
+    log.info(f"MQTT connected rc={rc}"),
+    c.subscribe(f"guardian/{DEVICE_ID}/command", qos=1),
+    send_status(),
+)
+client.on_message    = lambda c, u, msg: threading.Thread(
+    target=handle_command,
+    args=(json.loads(msg.payload.decode()),),
+    daemon=True,
+).start()
+client.on_disconnect = lambda c, u, rc: log.warning(f"MQTT disconnected rc={rc}")
+
 
 def heartbeat():
     while True:
-        try: send_status()
-        except: pass
+        try:
+            send_status()
+        except Exception as e:
+            log.warning(f"Heartbeat error: {e}")
         time.sleep(60)
 
+
 if __name__ == "__main__":
-    log.info(f"Guardian Mac Agent v2.0 — {DEVICE_ID}")
+    log.info(f"Guardian Mac Agent v2.1.0 — {DEVICE_ID}")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     threading.Thread(target=heartbeat, daemon=True).start()
     client.loop_forever(retry_first_connection=True)
