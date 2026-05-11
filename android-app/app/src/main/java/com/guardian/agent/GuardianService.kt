@@ -17,13 +17,13 @@ import java.util.TimerTask
 class GuardianService : Service() {
 
     private lateinit var prefs: SharedPreferences
-    private val RELAY_IP   get() = prefs.getString("relay_ip", "")!!
-    private val MQTT_PORT  get() = prefs.getInt("mqtt_port", 1883)
-    private val MQTT_USER  get() = prefs.getString("mqtt_user", "guardian")!!
-    private val MQTT_PASS  get() = prefs.getString("mqtt_pass", "")!!
-    private val DEVICE_ID  get() = prefs.getString("device_id", "phone-01")!!
+    private val RELAY_IP    get() = prefs.getString("relay_ip", "")!!
+    private val MQTT_PORT   get() = prefs.getInt("mqtt_port", 1883)
+    private val MQTT_USER   get() = prefs.getString("mqtt_user", "guardian")!!
+    private val MQTT_PASS   get() = prefs.getString("mqtt_pass", "")!!
+    private val DEVICE_ID   get() = prefs.getString("device_id", "phone-01")!!
     private val DEVICE_NAME get() = prefs.getString("device_name", "My Phone")!!
-    private val WG_IP      get() = prefs.getString("wg_ip", "")!!
+    private val WG_IP       get() = prefs.getString("wg_ip", "")!!
 
     private var mqttClient: MqttAsyncClient? = null
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -58,10 +58,14 @@ class GuardianService : Service() {
             Log.i("Guardian", "Wipe abort requested via notification")
             getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
             updateNotification("Wipe aborted")
-            mqttPublish("guardian/status", JSONObject().apply {
-                put("device_id", DEVICE_ID)
-                put("event", "wipe_aborted")
-            }.toString())
+            mqttPublish(
+                "guardian/$DEVICE_ID/ack",
+                JSONObject().apply {
+                    put("command", "wipe_complete")
+                    put("status", "aborted_locally")
+                    put("ts", System.currentTimeMillis())
+                }.toString()
+            )
         }
         return START_STICKY
     }
@@ -83,7 +87,7 @@ class GuardianService : Service() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 lastLocation = result.lastLocation
-                publishLocation(result.lastLocation!!)
+                lastLocation?.let { publishLocation(it) }
             }
         }
         try {
@@ -94,15 +98,23 @@ class GuardianService : Service() {
     }
 
     private fun publishLocation(loc: Location) {
-        mqttPublish("guardian/location", JSONObject().apply {
-            put("device_id", DEVICE_ID); put("lat", loc.latitude); put("lon", loc.longitude)
-            put("accuracy", loc.accuracy); put("timestamp", System.currentTimeMillis())
-        }.toString())
+        // FIX: topic was "guardian/location" — relay listens on "guardian/+/location"
+        mqttPublish(
+            "guardian/$DEVICE_ID/location",
+            JSONObject().apply {
+                put("device_id", DEVICE_ID)
+                put("lat", loc.latitude)
+                put("lon", loc.longitude)
+                put("accuracy", loc.accuracy)
+                put("method", "gps")
+                put("timestamp", System.currentTimeMillis())
+            }.toString()
+        )
     }
 
     private fun connectMqtt() {
         if (RELAY_IP.isEmpty()) {
-            Log.w("Guardian", "RELAY_IP not configured -- skipping MQTT connect until setup is complete")
+            Log.w("Guardian", "RELAY_IP not configured — skipping MQTT connect until setup is complete")
             return
         }
         try {
@@ -125,8 +137,10 @@ class GuardianService : Service() {
             })
             mqttClient!!.connect(opts, null, object : IMqttActionListener {
                 override fun onSuccess(token: IMqttToken?) {
-                    mqttClient!!.subscribe("guardian/cmd/$DEVICE_ID", 1)
+                    // FIX: topic was "guardian/cmd/$DEVICE_ID" — relay publishes to "guardian/$DEVICE_ID/command"
+                    mqttClient!!.subscribe("guardian/$DEVICE_ID/command", 1)
                     sendHeartbeat()
+                    Log.i("Guardian", "MQTT connected, subscribed to guardian/$DEVICE_ID/command")
                 }
                 override fun onFailure(token: IMqttToken?, e: Throwable?) {
                     Log.e("Guardian", "MQTT connect failed: ${e?.message}")
@@ -141,6 +155,8 @@ class GuardianService : Service() {
         try {
             if (mqttClient?.isConnected == true)
                 mqttClient!!.publish(topic, MqttMessage(payload.toByteArray()).apply { qos = 1 })
+            else
+                Log.w("Guardian", "MQTT not connected, dropping publish to $topic")
         } catch (e: Exception) {
             Log.e("Guardian", "Publish error: $e")
         }
@@ -150,33 +166,84 @@ class GuardianService : Service() {
         heartbeatTimer = Timer()
         heartbeatTimer!!.scheduleAtFixedRate(object : TimerTask() {
             override fun run() { sendHeartbeat() }
-        }, 0L, 30_000L)
+        }, 0L, 60_000L)
     }
 
     private fun sendHeartbeat() {
         val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
-        mqttPublish("guardian/heartbeat", JSONObject().apply {
-            put("device_id", DEVICE_ID); put("name", DEVICE_NAME); put("type", "android")
-            put("wg_ip", WG_IP)
-            put("battery", bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
-            put("timestamp", System.currentTimeMillis())
-        }.toString())
+        // FIX: topic was "guardian/heartbeat" — relay listens on "guardian/+/status"
+        mqttPublish(
+            "guardian/$DEVICE_ID/status",
+            JSONObject().apply {
+                put("device_id", DEVICE_ID)
+                put("name", DEVICE_NAME)
+                put("platform", "android")
+                put("wg_ip", WG_IP)
+                put("battery", bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
+                put("agent_version", "2.1.0")
+                put("ts", System.currentTimeMillis())
+            }.toString(),
+            retain = true
+        )
+    }
+
+    private fun mqttPublish(topic: String, payload: String, retain: Boolean = false) {
+        try {
+            if (mqttClient?.isConnected == true)
+                mqttClient!!.publish(topic, MqttMessage(payload.toByteArray()).apply {
+                    qos = 1
+                    isRetained = retain
+                })
+            else
+                Log.w("Guardian", "MQTT not connected, dropping publish to $topic")
+        } catch (e: Exception) {
+            Log.e("Guardian", "Publish error: $e")
+        }
     }
 
     private fun handleCommand(cmd: JSONObject) {
-        when (cmd.optString("action")) {
-            "locate"     -> lastLocation?.let { publishLocation(it) }
-            "lock"       -> lockDevice()
-            "backup"     -> doBackup()
+        // FIX: key was "action" — relay sends "command"
+        val issued_at = cmd.optLong("issued_at", 0L)
+        val ttl       = cmd.optLong("ttl", 300L)
+        val age       = (System.currentTimeMillis() / 1000L) - issued_at
+        if (issued_at > 0 && age > ttl) {
+            Log.w("Guardian", "Command expired (age=${age}s > ttl=${ttl}s), ignored")
+            return
+        }
+        when (cmd.optString("command")) {
+            "locate", "location" -> lastLocation?.let { publishLocation(it) }
+            "location_burst" -> Thread {
+                repeat(5) {
+                    lastLocation?.let { publishLocation(it) }
+                    Thread.sleep(2_000L)
+                }
+            }.start()
+            "status" -> sendHeartbeat()
+            "ping" -> mqttPublish(
+                "guardian/$DEVICE_ID/ack",
+                JSONObject().apply {
+                    put("command", "ping")
+                    put("status", "pong")
+                    put("ts", System.currentTimeMillis())
+                }.toString()
+            )
+            "lock" -> lockDevice()
+            "backup" -> doBackup()
             "abort_wipe" -> {
                 wipeAbortRequested = true
                 getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
                 updateNotification("Wipe aborted remotely")
-                mqttPublish("guardian/status", JSONObject().apply {
-                    put("device_id", DEVICE_ID); put("event", "wipe_aborted")
-                }.toString())
+                mqttPublish(
+                    "guardian/$DEVICE_ID/ack",
+                    JSONObject().apply {
+                        put("command", "wipe_complete")
+                        put("status", "aborted_locally")
+                        put("ts", System.currentTimeMillis())
+                    }.toString()
+                )
             }
             "wipe" -> Thread { doWipeWithAbort() }.start()
+            else -> Log.w("Guardian", "Unknown command: ${cmd.optString("command")}")
         }
     }
 
@@ -210,7 +277,7 @@ class GuardianService : Service() {
             updateNotification("Wipe aborted")
             return
         }
-        Log.i("Guardian", "Wipe countdown complete -- executing")
+        Log.i("Guardian", "Wipe countdown complete — executing")
         getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
         doWipe()
     }
@@ -218,23 +285,50 @@ class GuardianService : Service() {
     private fun lockDevice() {
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val admin = ComponentName(this, GuardianAdminReceiver::class.java)
-        if (dpm.isAdminActive(admin)) dpm.lockNow()
+        if (dpm.isAdminActive(admin)) {
+            dpm.lockNow()
+            mqttPublish(
+                "guardian/$DEVICE_ID/ack",
+                JSONObject().apply {
+                    put("command", "lock")
+                    put("status", "ok")
+                    put("ts", System.currentTimeMillis())
+                }.toString()
+            )
+        } else {
+            Log.e("Guardian", "Cannot lock — Device Admin not active")
+        }
     }
 
     private fun doBackup() {
-        mqttPublish("guardian/backup_complete", JSONObject().apply {
-            put("device_id", DEVICE_ID)
-            put("backup_id", "backup_${System.currentTimeMillis()}")
-        }.toString())
+        // Stub — real backup implementation to be added
+        mqttPublish(
+            "guardian/$DEVICE_ID/ack",
+            JSONObject().apply {
+                put("command", "backup")
+                put("status", "stub_not_implemented")
+                put("ts", System.currentTimeMillis())
+            }.toString()
+        )
     }
 
     private fun doWipe() {
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val admin = ComponentName(this, GuardianAdminReceiver::class.java)
-        if (dpm.isAdminActive(admin))
+        if (dpm.isAdminActive(admin)) {
+            mqttPublish(
+                "guardian/$DEVICE_ID/ack",
+                JSONObject().apply {
+                    put("command", "wipe_complete")
+                    put("status", "initiating")
+                    put("ts", System.currentTimeMillis())
+                }.toString()
+            )
+            Thread.sleep(2_000L)
             dpm.wipeData(DevicePolicyManager.WIPE_EXTERNAL_STORAGE)
-        else
-            Log.e("Guardian", "Cannot wipe -- Device Admin not active")
+        } else {
+            Log.e("Guardian", "Cannot wipe — Device Admin not active")
+        }
     }
 
     private fun scheduleRestart() {
@@ -242,8 +336,13 @@ class GuardianService : Service() {
             this, 1, Intent(this, GuardianService::class.java),
             PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
         )
+        // FIX: set() is inexact in Doze mode — use setExactAndAllowWhileIdle
         (getSystemService(ALARM_SERVICE) as AlarmManager)
-            .set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + 5000, pi)
+            .setExactAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME,
+                SystemClock.elapsedRealtime() + 5_000L,
+                pi
+            )
     }
 
     private fun createNotificationChannel() {
