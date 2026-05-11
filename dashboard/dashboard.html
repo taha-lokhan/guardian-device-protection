@@ -86,6 +86,8 @@ body::after{
 }
 .logo-text{font-family:'Orbitron',sans-serif;font-size:1.25rem;font-weight:900;letter-spacing:.15em;color:#fff;text-shadow:0 0 20px rgba(0,200,255,0.5)}
 .logo-sub{font-size:.65rem;color:var(--muted);letter-spacing:.2em;text-transform:uppercase}
+.relay-url{font-size:.6rem;color:var(--accent);opacity:.7;letter-spacing:.08em;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;border:1px solid transparent;padding:2px 6px;border-radius:4px;transition:all .2s;}
+.relay-url:hover{border-color:var(--border-hot);opacity:1;}
 .header-right{display:flex;align-items:center;gap:20px}
 .sys-stat{display:flex;flex-direction:column;align-items:flex-end;font-size:.65rem;color:var(--muted);letter-spacing:.1em;}
 .sys-stat span:first-child{font-size:.8rem;color:var(--accent);font-weight:700}
@@ -177,6 +179,8 @@ body::after{
 .btn-proceed:hover{box-shadow:var(--glow-danger)}
 .btn-cancel{border-color:var(--border);color:var(--muted);background:transparent}
 .btn-cancel:hover{border-color:var(--muted)}
+.btn-copy{border-color:rgba(0,200,255,0.2);color:var(--muted);background:transparent;padding:4px 8px;font-size:.6rem;}
+.btn-copy:hover{border-color:var(--accent);color:var(--accent)}
 .progress-wrap{margin-bottom:6px}
 .progress-label{display:flex;justify-content:space-between;font-size:.6rem;color:var(--muted);margin-bottom:4px;letter-spacing:.08em;}
 .progress-track{height:3px;background:rgba(255,255,255,0.05);border-radius:2px;overflow:hidden;}
@@ -224,6 +228,12 @@ body::after{
 .auth-submit{width:100%;padding:12px;background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;border-radius:8px;color:#000;font-family:'JetBrains Mono',monospace;font-size:.8rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;cursor:pointer;margin-top:8px;transition:all .2s;box-shadow:0 4px 20px rgba(0,200,255,0.3);}
 .auth-submit:hover{transform:translateY(-1px);box-shadow:0 6px 30px rgba(0,200,255,0.5)}
 .auth-submit:active{transform:translateY(1px)}
+/* --- relay url field in auth --- */
+.auth-relay-row{display:flex;gap:8px;margin-bottom:14px;}
+.auth-relay-row input{flex:1;padding:8px 12px;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.78rem;outline:none;transition:border-color .2s;}
+.auth-relay-row input:focus{border-color:var(--accent);}
+.auth-relay-row label{font-size:.6rem;color:var(--muted);letter-spacing:.12em;text-transform:uppercase;display:block;margin-bottom:5px;}
+/* --- nuke modal --- */
 .modal-overlay{position:fixed;inset:0;background:rgba(2,4,8,0.9);display:none;align-items:center;justify-content:center;z-index:5000;backdrop-filter:blur(6px);}
 .modal-overlay.open{display:flex}
 .modal{width:420px;background:linear-gradient(135deg,rgba(20,5,8,0.98),rgba(10,3,5,0.99));border:1px solid rgba(255,34,68,0.3);border-radius:16px;padding:32px;box-shadow:var(--glow-danger);animation:authIn .3s ease;position:relative;overflow:hidden;}
@@ -241,6 +251,32 @@ body::after{
 .modal-field input:focus{border-color:rgba(255,34,68,0.6);box-shadow:0 0 0 3px rgba(255,34,68,0.1)}
 .modal-err{color:var(--danger);font-size:.72rem;margin-bottom:10px;min-height:16px}
 .modal-actions{display:flex;gap:10px;margin-top:6px}
+/* --- location modal --- */
+.loc-modal-overlay{position:fixed;inset:0;background:rgba(2,4,8,0.9);display:none;align-items:center;justify-content:center;z-index:5000;backdrop-filter:blur(6px);}
+.loc-modal-overlay.open{display:flex}
+.loc-modal{
+  width:460px;max-height:80vh;
+  background:linear-gradient(135deg,rgba(5,20,15,0.98),rgba(3,10,8,0.99));
+  border:1px solid rgba(0,255,136,0.2);border-radius:16px;padding:28px;
+  box-shadow:0 0 40px rgba(0,255,136,0.08);animation:authIn .3s ease;
+  position:relative;overflow:hidden;display:flex;flex-direction:column;
+}
+.loc-modal::before{content:'';position:absolute;top:-2px;left:20%;right:20%;height:2px;background:linear-gradient(90deg,transparent,var(--ok),transparent);animation:scanTop 2s linear infinite;}
+.loc-modal-title{font-family:'Orbitron',sans-serif;font-size:1rem;font-weight:900;color:var(--ok);letter-spacing:.1em;margin-bottom:4px;}
+.loc-modal-sub{font-size:.6rem;color:var(--muted);letter-spacing:.1em;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid rgba(0,255,136,0.1);}
+.loc-list{overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:8px;max-height:45vh;}
+.loc-entry{
+  background:rgba(0,255,136,0.03);border:1px solid rgba(0,255,136,0.1);
+  border-radius:8px;padding:12px 14px;
+  display:flex;flex-direction:column;gap:4px;
+}
+.loc-entry-top{display:flex;justify-content:space-between;align-items:center;}
+.loc-coords{font-family:'Orbitron',sans-serif;font-size:.75rem;color:var(--ok);letter-spacing:.05em;}
+.loc-meta{font-size:.6rem;color:var(--muted);letter-spacing:.06em;margin-top:2px;}
+.loc-ts{font-size:.6rem;color:var(--muted);text-align:right;letter-spacing:.06em;}
+.loc-empty{text-align:center;padding:32px;color:var(--muted);font-size:.75rem;letter-spacing:.1em;}
+.loc-loading{text-align:center;padding:32px;color:var(--accent);font-size:.75rem;letter-spacing:.1em;display:flex;align-items:center;justify-content:center;gap:10px;}
+.loc-modal-footer{margin-top:16px;display:flex;justify-content:flex-end;}
 #toast{position:fixed;bottom:28px;right:28px;max-width:360px;background:var(--surface);border-radius:10px;padding:14px 20px;font-size:.78rem;opacity:0;transform:translateY(10px);transition:all .3s cubic-bezier(.175,.885,.32,1.275);pointer-events:none;z-index:99999;backdrop-filter:blur(20px);display:flex;align-items:center;gap:10px;}
 #toast::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:10px 0 0 10px;}
 #toast.show{opacity:1;transform:translateY(0)}
@@ -261,6 +297,7 @@ body::after{
 .log-msg.info{color:var(--accent)}
 .loading-card{grid-column:1/-1;display:flex;align-items:center;justify-content:center;padding:60px;color:var(--muted);font-size:.8rem;letter-spacing:.1em;}
 .spinner{width:24px;height:24px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin-right:12px;}
+.spinner-sm{width:14px;height:14px;border:2px solid rgba(0,200,255,0.2);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes ripple{0%{box-shadow:0 0 0 0 rgba(0,255,136,0.3)}100%{box-shadow:0 0 0 12px rgba(0,255,136,0)}}
 @media(max-width:600px){.header{padding:14px 16px}.content{padding:16px}.logo-text{font-size:.9rem}.header-right{gap:10px}}
@@ -273,12 +310,17 @@ body::after{
 <div class="corner corner-bl"></div>
 <div class="corner corner-br"></div>
 
+<!-- AUTH OVERLAY -->
 <div class="auth-overlay" id="authOverlay">
   <div class="auth-box">
     <div class="auth-logo">
       <div class="hex">&#x1F6E1;&#xFE0F;</div>
       <div class="auth-title">GUARDIAN</div>
-      <div class="auth-subtitle">COMMAND CENTER // v2.0</div>
+      <div class="auth-subtitle">COMMAND CENTER // v2.2</div>
+    </div>
+    <div class="auth-field">
+      <label>Relay URL</label>
+      <input type="text" id="authRelayUrl" placeholder="http://10.0.0.1:8000" autocomplete="off" spellcheck="false"/>
     </div>
     <div class="auth-field">
       <label>Master Password</label>
@@ -293,6 +335,7 @@ body::after{
   </div>
 </div>
 
+<!-- NUKE MODAL -->
 <div class="modal-overlay" id="nukeModal">
   <div class="modal">
     <div class="modal-title">[!] WIPE AUTHORIZATION</div>
@@ -328,12 +371,25 @@ body::after{
   </div>
 </div>
 
+<!-- LOCATION MODAL -->
+<div class="loc-modal-overlay" id="locModal">
+  <div class="loc-modal">
+    <div class="loc-modal-title">[o] LOCATION HISTORY</div>
+    <div class="loc-modal-sub" id="locModalSub">Device: --</div>
+    <div class="loc-list" id="locList"></div>
+    <div class="loc-modal-footer">
+      <button class="btn btn-cancel" onclick="closeLocModal()">CLOSE</button>
+    </div>
+  </div>
+</div>
+
 <header class="header">
   <div class="logo">
     <div class="logo-icon">&#x1F6E1;&#xFE0F;</div>
     <div>
       <div class="logo-text">GUARDIAN</div>
       <div class="logo-sub">Device Protection Network</div>
+      <div class="relay-url" id="relayUrlDisplay" onclick="resetRelayUrl()" title="Click to change relay URL">NOT CONNECTED</div>
     </div>
   </div>
   <div class="header-right">
@@ -383,6 +439,9 @@ body::after{
 (function() {
   'use strict';
 
+  // ── RELAY URL ──────────────────────────────────────────────────────────────
+  // Stored in module scope only (no localStorage — sandbox blocks it).
+  // Set during login; shown in header; resettable via header click.
   var API = '';
   var authToken = '';
   var nukeTargetDevice = '';
@@ -396,6 +455,31 @@ body::after{
   }
   setInterval(updateClock, 1000);
   updateClock();
+
+  function updateRelayDisplay() {
+    var el = document.getElementById('relayUrlDisplay');
+    if (el) {
+      el.textContent = API ? API : 'NOT CONNECTED';
+      el.title = API ? 'Relay: ' + API + ' — click to change' : 'Click to set relay URL';
+    }
+  }
+
+  function resetRelayUrl() {
+    // Show auth screen again to change URL
+    API = '';
+    authToken = '';
+    updateRelayDisplay();
+    var ov = document.getElementById('authOverlay');
+    ov.style.opacity = '0';
+    ov.style.display = 'flex';
+    requestAnimationFrame(function() {
+      ov.style.transition = 'opacity .3s';
+      ov.style.opacity = '1';
+    });
+    document.getElementById('authErr').textContent = '';
+  }
+
+  window.resetRelayUrl = resetRelayUrl;
 
   function apiFetch(path, method, body) {
     method = method || 'GET';
@@ -411,31 +495,38 @@ body::after{
   }
 
   function doLogin() {
+    var relayRaw = document.getElementById('authRelayUrl').value.trim().replace(/\/$/, '');
     var pass = document.getElementById('authPassword').value;
     var totp = document.getElementById('authTotp').value;
-    if (!pass || !totp) {
-      document.getElementById('authErr').textContent = '[!] All fields required';
+    if (!relayRaw || !pass || !totp) {
+      document.getElementById('authErr').textContent = '[!] All fields required (Relay URL, Password, TOTP)';
       return;
     }
+    // Normalise: ensure http:// or https:// prefix
+    if (!/^https?:\/\//.test(relayRaw)) { relayRaw = 'http://' + relayRaw; }
+    API = relayRaw;
     authToken = pass + ':' + totp;
     apiFetch('/devices').then(function(res) {
       if (res.ok) {
+        updateRelayDisplay();
         var ov = document.getElementById('authOverlay');
         ov.style.transition = 'opacity .4s';
         ov.style.opacity = '0';
         setTimeout(function() { ov.style.display = 'none'; }, 400);
-        addLog('Authentication successful', 'ok');
+        addLog('Authentication successful — relay: ' + API, 'ok');
         startDashboard();
       } else {
         document.getElementById('authErr').textContent = '[!] Invalid credentials';
         authToken = '';
+        API = '';
         var box = document.querySelector('.auth-box');
         box.style.animation = 'shake .3s ease';
         setTimeout(function() { box.style.animation = ''; }, 300);
       }
     }).catch(function() {
-      document.getElementById('authErr').textContent = '[!] Connection failed';
+      document.getElementById('authErr').textContent = '[!] Connection failed — check relay URL';
       authToken = '';
+      API = '';
     });
   }
 
@@ -444,8 +535,10 @@ body::after{
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && document.getElementById('authOverlay').style.display !== 'none') { doLogin(); }
     if (e.key === 'Enter' && document.getElementById('nukeModal').classList.contains('open')) { nukeStepHandler(); }
+    if (e.key === 'Escape' && document.getElementById('locModal').classList.contains('open')) { closeLocModal(); }
   });
 
+  // ── COMMANDS ──────────────────────────────────────────────────────────────
   function sendCommand(deviceId, command) {
     apiFetch('/command', 'POST', { device_id: deviceId, command: command, params: {} })
       .then(function(res) {
@@ -463,6 +556,93 @@ body::after{
       .catch(function() { toast('[ERR] Network error', 'err'); });
   }
 
+  // ── LOCATE: send burst then show history modal ─────────────────────────────
+  function doLocate(deviceId) {
+    addLog('Location burst requested for ' + deviceId, 'info');
+    // Send burst command first
+    apiFetch('/command', 'POST', { device_id: deviceId, command: 'location_burst', params: {} })
+      .then(function(res) {
+        if (!res.ok) { return res.json().then(function(d) { toast('[ERR] ' + (d.detail || 'Error'), 'err'); }); }
+        toast('[o] Location burst sent — fetching history...', 'ok');
+        // Open modal with loading state immediately
+        openLocModal(deviceId, true);
+        // Wait 4 s for burst pings to arrive, then load history
+        setTimeout(function() { loadLocHistory(deviceId); }, 4000);
+      })
+      .catch(function() { toast('[ERR] Network error', 'err'); });
+  }
+
+  function openLocModal(deviceId, loading) {
+    document.getElementById('locModalSub').textContent = 'Device: ' + deviceId;
+    var list = document.getElementById('locList');
+    if (loading) {
+      list.innerHTML = '<div class="loc-loading"><div class="spinner-sm"></div>Waiting for location pings...</div>';
+    }
+    document.getElementById('locModal').classList.add('open');
+  }
+
+  function loadLocHistory(deviceId) {
+    apiFetch('/devices/' + encodeURIComponent(deviceId) + '/location')
+      .then(function(res) {
+        if (!res.ok) { renderLocError(); return; }
+        res.json().then(function(data) { renderLocList(data.locations || []); });
+      })
+      .catch(function() { renderLocError(); });
+  }
+
+  function renderLocList(locs) {
+    var list = document.getElementById('locList');
+    if (!locs || !locs.length) {
+      list.innerHTML = '<div class="loc-empty">[no location data received]</div>';
+      return;
+    }
+    // Newest first, cap at 10
+    var show = locs.slice(0, 10);
+    list.innerHTML = show.map(function(loc) {
+      var lat  = typeof loc.lat === 'number'  ? loc.lat.toFixed(5)  : (loc.lat  || '--');
+      var lon  = typeof loc.lon === 'number'  ? loc.lon.toFixed(5)  : (loc.lon  || '--');
+      var acc  = loc.accuracy ? (typeof loc.accuracy === 'number' ? loc.accuracy.toFixed(0) + 'm' : loc.accuracy) : '';
+      var meth = loc.method || 'unknown';
+      var ts   = loc.recorded_at ? new Date(loc.recorded_at).toLocaleString() : (loc.timestamp ? new Date(loc.timestamp).toLocaleString() : '--');
+      var coordStr = lat + ',' + lon;
+      var eid = encodeURIComponent(coordStr);
+      return '<div class="loc-entry">' +
+        '<div class="loc-entry-top">' +
+        '<span class="loc-coords">' + escHtml(lat) + ', ' + escHtml(lon) + '</span>' +
+        '<button class="btn btn-copy" data-copy="' + escHtml(coordStr) + '">[copy]</button>' +
+        '</div>' +
+        '<div class="loc-meta">METHOD: ' + escHtml(meth) + (acc ? ' &bull; ACCURACY: ' + escHtml(acc) : '') + '</div>' +
+        '<div class="loc-ts">' + escHtml(ts) + '</div>' +
+        '</div>';
+    }).join('');
+  }
+
+  function renderLocError() {
+    var list = document.getElementById('locList');
+    list.innerHTML = '<div class="loc-empty" style="color:var(--danger)">[!] Failed to fetch location history</div>';
+  }
+
+  function closeLocModal() {
+    document.getElementById('locModal').classList.remove('open');
+  }
+
+  window.closeLocModal = closeLocModal;
+
+  // Copy coords via click delegation (in loc-list)
+  document.addEventListener('click', function(e) {
+    var copyBtn = e.target.closest ? e.target.closest('[data-copy]') : null;
+    if (copyBtn) {
+      var txt = copyBtn.dataset.copy;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(txt).then(function() { toast('[OK] Coords copied: ' + txt, 'ok'); });
+      } else {
+        toast('[OK] ' + txt, 'ok');
+      }
+      return;
+    }
+  });
+
+  // ── DASHBOARD INIT ────────────────────────────────────────────────────────
   function startDashboard() {
     loadDevices();
     setInterval(loadDevices, 10000);
@@ -539,11 +719,11 @@ body::after{
     html += '<div class="info-row"><span class="info-key">OS_VER</span><span class="info-val accent">' + escHtml(d.os_version || '--') + '</span></div>';
     html += '<div class="info-row"><span class="info-key">AGENT_VER</span><span class="info-val">' + escHtml(d.agent_version || '--') + '</span></div>';
     html += '<div class="info-row"><span class="info-key">LAST_SEEN</span><span class="info-val">' + escHtml(lastSeenStr) + '</span></div>';
-    html += '<div class="info-row"><span class="info-key">IP_ADDR</span><span class="info-val accent">' + escHtml(d.ip || '--') + '</span></div>';
+    html += '<div class="info-row"><span class="info-key">WG_IP</span><span class="info-val accent">' + escHtml(d.wg_ip || d.ip || '--') + '</span></div>';
     html += '</div>';
     html += '<div class="actions">';
     html += '<button class="btn btn-ping" data-cmd="ping" data-id="' + eid + '">[>] PING</button>';
-    html += '<button class="btn btn-locate" data-cmd="location" data-id="' + eid + '">[o] LOCATE</button>';
+    html += '<button class="btn btn-locate" data-locate="' + eid + '">[o] LOCATE</button>';
     html += '<button class="btn btn-lock" data-cmd="lock" data-id="' + eid + '">[x] LOCK</button>';
     html += '<button class="btn btn-nuke" data-nuke="' + eid + '">[!] NUKE</button>';
     html += '</div>';
@@ -564,6 +744,11 @@ body::after{
     var cmdBtn = e.target.closest ? e.target.closest('[data-cmd]') : null;
     if (cmdBtn) {
       sendCommand(decodeURIComponent(cmdBtn.dataset.id), cmdBtn.dataset.cmd);
+      return;
+    }
+    var locBtn = e.target.closest ? e.target.closest('[data-locate]') : null;
+    if (locBtn) {
+      doLocate(decodeURIComponent(locBtn.dataset.locate));
       return;
     }
     var nukeBtn = e.target.closest ? e.target.closest('[data-nuke]') : null;
@@ -779,8 +964,8 @@ body::after{
   shakeStyle.textContent = '@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}';
   document.head.appendChild(shakeStyle);
 
-  addLog('Guardian Command Center initialized', 'info');
-  addLog('Awaiting authentication...', 'warn');
+  addLog('Guardian Command Center v2.2 initialized', 'info');
+  addLog('Enter relay URL and credentials to authenticate...', 'warn');
 
 }());
 </script>
