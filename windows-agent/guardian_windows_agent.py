@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
-Guardian Windows Agent v2.1
+Guardian Windows Agent v2.2.0
 Command TTL, location burst, abort dialog, silent recovery-mode wipe.
 
-Wipe method (v2.1):
+Wipe method (v2.1+):
   Uses reagentc /boottore + ResetConfig.xml to trigger a silent, unattended
   factory reset on next boot — the user cannot cancel this from the lock screen.
   Falls back to systemreset.exe -factoryreset if reagentc is not available
   (e.g. WinRE is disabled or older Windows versions).
+
+Changes in v2.2.0:
+- Add WG_IP env var (GUARDIAN_WG_IP) and include wg_ip in status payload
+  so the dashboard can display the WireGuard IP for this device instead of '--'
 
 Requirements:
   - Run as SYSTEM or Administrator
@@ -16,7 +20,7 @@ Requirements:
 
 Environment variables:
   GUARDIAN_BROKER, GUARDIAN_PORT, GUARDIAN_MQTT_USER, GUARDIAN_MQTT_PASS,
-  GUARDIAN_DEVICE_ID, GUARDIAN_ABORT_WINDOW
+  GUARDIAN_DEVICE_ID, GUARDIAN_ABORT_WINDOW, GUARDIAN_WG_IP
 """
 import json, os, sys, time, threading, subprocess, platform, ctypes, logging, shutil
 from pathlib import Path
@@ -29,6 +33,7 @@ MQTT_USER    = os.getenv("GUARDIAN_MQTT_USER",    "guardian")
 MQTT_PASS    = os.getenv("GUARDIAN_MQTT_PASS",    "changeme")
 DEVICE_ID    = os.getenv("GUARDIAN_DEVICE_ID",    f"win-{platform.node()}")
 ABORT_WINDOW = int(os.getenv("GUARDIAN_ABORT_WINDOW", 30))
+WG_IP        = os.getenv("GUARDIAN_WG_IP",        "")   # WireGuard IP shown in dashboard
 
 LOG_DIR = os.path.join(os.environ.get("PROGRAMDATA", "C:\\ProgramData"), "Guardian")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -73,14 +78,21 @@ def location_burst(count=5, interval=2.0):
         time.sleep(interval)
 
 def send_status():
-    client.publish(f"guardian/{DEVICE_ID}/status", json.dumps({
+    payload = {
         "device_id":     DEVICE_ID,
         "platform":      "windows",
         "os_version":    platform.version(),
         "hostname":      platform.node(),
-        "agent_version": "2.1.0",
+        "agent_version": "2.2.0",
         "ts":            time.time(),
-    }), qos=1, retain=True)
+    }
+    if WG_IP:
+        payload["wg_ip"] = WG_IP
+    client.publish(
+        f"guardian/{DEVICE_ID}/status",
+        json.dumps(payload),
+        qos=1, retain=True,
+    )
 
 def abort_dialog(seconds):
     MB_ABORTRETRYIGNORE = 0x00000002
@@ -114,7 +126,7 @@ def _winre_available() -> bool:
 def _write_reset_config():
     """
     Write a ResetConfig.xml that instructs WinRE to perform a fully unattended
-     'Remove everything' reset without user interaction.
+    'Remove everything' reset without user interaction.
 
     Path: %SystemRoot%\\System32\\Recovery\\ResetConfig.xml
     This file is read by WinRE during the recovery boot.
@@ -163,9 +175,7 @@ def wipe_windows():
         log.warning("Wipe method: reagentc /boottore (silent recovery reset)")
         try:
             _write_reset_config()
-            # Schedule WinRE to run on next boot
             subprocess.run(["reagentc", "/boottore"], check=True)
-            # Immediate forced reboot — no user prompt
             subprocess.run(
                 ["shutdown", "/r", "/f", "/t", "0"],
                 check=True,
@@ -245,7 +255,7 @@ def heartbeat():
         time.sleep(60)
 
 if __name__ == "__main__":
-    log.info(f"Guardian Windows Agent v2.1 — {DEVICE_ID}")
+    log.info(f"Guardian Windows Agent v2.2.0 — {DEVICE_ID}")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     threading.Thread(target=heartbeat, daemon=True).start()
     client.loop_forever(retry_first_connection=True)
