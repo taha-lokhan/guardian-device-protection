@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-Guardian Mac Agent v2.1.0
+Guardian Mac Agent v2.2.0
 Wipe method: Full erase + reinstall macOS (Option A)
 Runs as a LaunchDaemon (root). Survives login/logout.
+
+Changes in v2.2.0:
+- Add WG_IP env var (GUARDIAN_WG_IP) and include wg_ip in status payload
+  so the dashboard can display the WireGuard IP for this device
 
 Changes in v2.1.0:
 - fix: get_location() no longer spawns a subprocess-inside-python subprocess;
@@ -11,7 +15,6 @@ Changes in v2.1.0:
   with cascading fallback: pmset displaysleepnow -> osascript -> CGSession legacy
 - fix: nvram fallback in wipe_mac() guarded with os.path.exists; Apple Silicon
   boot argument set via bless --nextonly --legacyboot as alternative path
-- version: 2.1.0
 """
 import json, os, sys, time, subprocess, threading, logging, platform
 import urllib.request
@@ -23,6 +26,7 @@ MQTT_USER     = os.getenv("GUARDIAN_MQTT_USER", "guardian")
 MQTT_PASS     = os.getenv("GUARDIAN_MQTT_PASS", "changeme")
 DEVICE_ID     = os.getenv("GUARDIAN_DEVICE_ID", f"mac-{platform.node()}")
 ABORT_WINDOW  = int(os.getenv("GUARDIAN_ABORT_WINDOW", 30))
+WG_IP         = os.getenv("GUARDIAN_WG_IP", "")   # WireGuard IP shown in dashboard
 
 LOG_FILE = "/var/log/guardian_mac.log"
 logging.basicConfig(
@@ -38,7 +42,7 @@ client.username_pw_set(MQTT_USER, MQTT_PASS)
 
 def get_location() -> dict:
     """
-    FIX: previously called subprocess.run(["python3", "-c", ...]) which spawned
+    FIX (v2.1.0): previously called subprocess.run(["python3", "-c", ...]) which spawned
     a child python3 process inside the running python3 process. That approach
     fails if 'python3' is not on PATH for the LaunchDaemon environment.
     Now calls urllib.request directly in-process.
@@ -77,14 +81,14 @@ def location_burst(count: int = 5, interval: float = 2.0):
 
 def lock_mac() -> bool:
     """
-    FIX: CGSession path hard-coded to Menu Extras/User.menu is broken on
+    FIX (v2.1.0): CGSession path hard-coded to Menu Extras/User.menu is broken on
     macOS 13 Ventura and later (path no longer exists).
 
     Cascading fallback strategy:
-      1. pmset displaysleepnow       — reliable on Ventura+, dims + locks if
+      1. pmset displaysleepnow       -- reliable on Ventura+, dims + locks if
                                         "Require password immediately" is set
-      2. osascript screensaver       — activates screen saver which triggers lock
-      3. CGSession -suspend (legacy) — kept for Intel Macs on Monterey and earlier
+      2. osascript screensaver       -- activates screen saver which triggers lock
+      3. CGSession -suspend (legacy) -- kept for Intel Macs on Monterey and earlier
 
     Returns True if any method succeeded (rc=0).
     """
@@ -117,7 +121,7 @@ def lock_mac() -> bool:
 
 
 def wipe_mac():
-    log.warning("WIPE — Option A: eraseinstall")
+    log.warning("WIPE -- Option A: eraseinstall")
     client.publish(
         f"guardian/{DEVICE_ID}/ack",
         json.dumps({"command": "wipe_complete", "status": "initiating", "ts": time.time()}),
@@ -142,15 +146,14 @@ def wipe_mac():
             )
             return
 
-    # FIX: nvram path guard + Apple Silicon bless fallback
-    log.warning("Installer not found — attempting recovery reboot")
+    # FIX (v2.1.0): nvram path guard + Apple Silicon bless fallback
+    log.warning("Installer not found -- attempting recovery reboot")
     nvram = "/usr/sbin/nvram"
     if os.path.exists(nvram):
         subprocess.run([nvram, "internet-recovery-mode=RecoveryModeDisk"], check=False)
         subprocess.run(["reboot", "-n"], check=False)
     else:
-        # Apple Silicon: use bless to force recovery on next boot
-        log.warning("nvram not found — attempting bless recovery (Apple Silicon)")
+        log.warning("nvram not found -- attempting bless recovery (Apple Silicon)")
         subprocess.run(
             ["bless", "--mount", "/", "--setBoot", "--nextonly", "--legacyboot"],
             check=False,
@@ -223,16 +226,19 @@ def handle_command(payload: dict):
 
 
 def send_status():
+    payload = {
+        "device_id":     DEVICE_ID,
+        "platform":      "mac",
+        "os_version":    platform.mac_ver()[0],
+        "hostname":      platform.node(),
+        "agent_version": "2.2.0",
+        "ts":            time.time(),
+    }
+    if WG_IP:
+        payload["wg_ip"] = WG_IP
     client.publish(
         f"guardian/{DEVICE_ID}/status",
-        json.dumps({
-            "device_id":     DEVICE_ID,
-            "platform":      "mac",
-            "os_version":    platform.mac_ver()[0],
-            "hostname":      platform.node(),
-            "agent_version": "2.1.0",
-            "ts":            time.time(),
-        }),
+        json.dumps(payload),
         qos=1, retain=True,
     )
 
@@ -260,7 +266,7 @@ def heartbeat():
 
 
 if __name__ == "__main__":
-    log.info(f"Guardian Mac Agent v2.1.0 — {DEVICE_ID}")
+    log.info(f"Guardian Mac Agent v2.2.0 -- {DEVICE_ID}")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     threading.Thread(target=heartbeat, daemon=True).start()
     client.loop_forever(retry_first_connection=True)
