@@ -32,6 +32,9 @@ DEVICE_ID     = os.getenv("GUARDIAN_DEVICE_ID", f"mac-{platform.node()}")
 ABORT_WINDOW  = int(os.getenv("GUARDIAN_ABORT_WINDOW", 30))
 WG_IP         = os.getenv("GUARDIAN_WG_IP", "")   # WireGuard IP shown in dashboard
 
+# Single source of truth for agent version — referenced in send_status() and logs.
+AGENT_VERSION = "2.2.1"
+
 LOG_FILE = "/var/log/guardian_mac.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -234,7 +237,7 @@ def send_status():
         "platform":      "mac",
         "os_version":    platform.mac_ver()[0],
         "hostname":      platform.node(),
-        "agent_version": "2.2.1",
+        "agent_version": AGENT_VERSION,  # reference constant, not hardcoded string
         "ts":            time.time(),
     }
     if WG_IP:
@@ -269,7 +272,7 @@ def heartbeat():
 
 
 if __name__ == "__main__":
-    log.info(f"Guardian Mac Agent v2.2.1 -- {DEVICE_ID}")
+    log.info(f"Guardian Mac Agent {AGENT_VERSION} -- {DEVICE_ID}")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     threading.Thread(target=heartbeat, daemon=True).start()
     client.loop_forever(retry_first_connection=True)
