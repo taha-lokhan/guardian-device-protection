@@ -36,6 +36,7 @@ class GuardianService : Service() {
     private var wipeCancelIntent: PendingIntent? = null
 
     companion object {
+        const val AGENT_VERSION     = "2.2.0"
         const val CHANNEL_ID        = "guardian_service"
         const val NOTIF_ID          = 1001
         const val NOTIF_WIPE_ID     = 1002
@@ -98,7 +99,6 @@ class GuardianService : Service() {
     }
 
     private fun publishLocation(loc: Location) {
-        // FIX: topic was "guardian/location" — relay listens on "guardian/+/location"
         mqttPublish(
             "guardian/$DEVICE_ID/location",
             JSONObject().apply {
@@ -137,7 +137,6 @@ class GuardianService : Service() {
             })
             mqttClient!!.connect(opts, null, object : IMqttActionListener {
                 override fun onSuccess(token: IMqttToken?) {
-                    // FIX: topic was "guardian/cmd/$DEVICE_ID" — relay publishes to "guardian/$DEVICE_ID/command"
                     mqttClient!!.subscribe("guardian/$DEVICE_ID/command", 1)
                     sendHeartbeat()
                     Log.i("Guardian", "MQTT connected, subscribed to guardian/$DEVICE_ID/command")
@@ -149,42 +148,6 @@ class GuardianService : Service() {
         } catch (e: Exception) {
             Log.e("Guardian", "MQTT error: $e")
         }
-    }
-
-    private fun mqttPublish(topic: String, payload: String) {
-        try {
-            if (mqttClient?.isConnected == true)
-                mqttClient!!.publish(topic, MqttMessage(payload.toByteArray()).apply { qos = 1 })
-            else
-                Log.w("Guardian", "MQTT not connected, dropping publish to $topic")
-        } catch (e: Exception) {
-            Log.e("Guardian", "Publish error: $e")
-        }
-    }
-
-    private fun startHeartbeat() {
-        heartbeatTimer = Timer()
-        heartbeatTimer!!.scheduleAtFixedRate(object : TimerTask() {
-            override fun run() { sendHeartbeat() }
-        }, 0L, 60_000L)
-    }
-
-    private fun sendHeartbeat() {
-        val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
-        // FIX: topic was "guardian/heartbeat" — relay listens on "guardian/+/status"
-        mqttPublish(
-            "guardian/$DEVICE_ID/status",
-            JSONObject().apply {
-                put("device_id", DEVICE_ID)
-                put("name", DEVICE_NAME)
-                put("platform", "android")
-                put("wg_ip", WG_IP)
-                put("battery", bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
-                put("agent_version", "2.1.0")
-                put("ts", System.currentTimeMillis())
-            }.toString(),
-            retain = true
-        )
     }
 
     private fun mqttPublish(topic: String, payload: String, retain: Boolean = false) {
@@ -201,8 +164,31 @@ class GuardianService : Service() {
         }
     }
 
+    private fun startHeartbeat() {
+        heartbeatTimer = Timer()
+        heartbeatTimer!!.scheduleAtFixedRate(object : TimerTask() {
+            override fun run() { sendHeartbeat() }
+        }, 0L, 60_000L)
+    }
+
+    private fun sendHeartbeat() {
+        val bm = getSystemService(BATTERY_SERVICE) as BatteryManager
+        mqttPublish(
+            "guardian/$DEVICE_ID/status",
+            JSONObject().apply {
+                put("device_id", DEVICE_ID)
+                put("name", DEVICE_NAME)
+                put("platform", "android")
+                put("wg_ip", WG_IP)
+                put("battery", bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY))
+                put("agent_version", AGENT_VERSION)
+                put("ts", System.currentTimeMillis())
+            }.toString(),
+            retain = true
+        )
+    }
+
     private fun handleCommand(cmd: JSONObject) {
-        // FIX: key was "action" — relay sends "command"
         val issued_at = cmd.optLong("issued_at", 0L)
         val ttl       = cmd.optLong("ttl", 300L)
         val age       = (System.currentTimeMillis() / 1000L) - issued_at
@@ -336,7 +322,6 @@ class GuardianService : Service() {
             this, 1, Intent(this, GuardianService::class.java),
             PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
         )
-        // FIX: set() is inexact in Doze mode — use setExactAndAllowWhileIdle
         (getSystemService(ALARM_SERVICE) as AlarmManager)
             .setExactAndAllowWhileIdle(
                 AlarmManager.ELAPSED_REALTIME,
