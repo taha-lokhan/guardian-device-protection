@@ -44,7 +44,7 @@ jobs:
 
       - name: Attach to release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@da05d552573ad5aba174888e138571e4d11ab3f8  # v2
+        uses: softprops/action-gh-release@v2
         with:
           files: windows-agent/dist/guardian_windows_agent.exe
 
@@ -91,6 +91,6 @@ jobs:
 
       - name: Attach to release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@da05d552573ad5aba174888e138571e4d11ab3f8  # v2
+        uses: softprops/action-gh-release@v2
         with:
           files: mac-agent/dist/guardian-mac-agent.zip
