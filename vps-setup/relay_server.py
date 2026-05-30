@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-Guardian Relay Server v2.4.0
+Guardian Relay Server v2.5.0
 FastAPI + MQTT relay with nuke system, TOTP auth, ntfy.sh alerts, command TTL
 
+Changes in v2.5.0:
+- Signed MQTT commands: every command published to guardian/{id}/command now
+  includes an HMAC-SHA256 signature over (command_id + command + issued_at).
+  Agents must verify this signature before executing any command. The signing
+  key is COMMAND_SIGNING_KEY (env var, defaults to a random value at startup
+  if unset — set it explicitly so agents can share the same key).
+- Session token auth: POST /auth/login accepts {password, totp} and returns a
+  short-lived session token (UUID stored in DB). All other endpoints now accept
+  either:
+    (a) Bearer <session_token>  — preferred, TOTP consumed once at login
+    (b) Bearer <password:totp>  — legacy, still supported for backward compat
+  Session tokens expire after SESSION_TTL_SECS (default 1800s / 30 min).
+  POST /auth/logout invalidates the token immediately.
+  This means the TOTP code and master password are no longer sent on every API
+  request — only on the single login call.
+
 Changes in v2.4.0:
-- Security hardening: /health and /agents/latest now require auth so the
-  server version and agent metadata are no longer exposed to unauthenticated
-  callers. The /health response no longer includes the version string.
-- Global auth rate-limiting: require_auth now tracks failed attempts by
-  client IP (X-Forwarded-For → fallback to direct IP). After
-  AUTH_MAX_FAILS (default 10) failures within AUTH_WINDOW_SECS (default 60s)
-  the IP is locked out for AUTH_LOCKOUT_SECS (default 300s). State is stored
-  in the auth_fails table (in-memory dict with DB-backed persistence on
-  startup/shutdown would add complexity; SQLite table is sufficient for a
-  single-process deployment).
+- Security hardening: /health and /agents/latest now require auth.
+- Global auth rate-limiting: per-IP fail counter with lockout.
 
 Changes in v2.3.0:
-- Dead-man's switch: background watchdog checks every 60s; if a device misses
-  WATCHDOG_TIMEOUT_SECS (default 300s) of heartbeats, an ntfy alert fires.
-  Alerts deduplicated — only one alert per silence episode, clears on next
-  heartbeat from the device.
-- Per-device command log: every command sent via /command is written to
-  command_log table. New GET /devices/{id}/log endpoint returns the last 100
-  entries. ACKs update the log entry status.
-- Agent version endpoint: GET /agents/latest returns expected agent versions
-  per platform so deployed agents can detect when they are outdated.
+- Dead-man's switch watchdog, per-device command log, agent version endpoint.
 
 Changes in v2.2.0:
 - TOTP replay protection, lifespan migration, asyncio.get_running_loop(),
@@ -70,22 +70,34 @@ NUKE_COUNTDOWN  = int(os.getenv("NUKE_COUNTDOWN", 600))
 NUKE_STATE_TTL  = int(os.getenv("NUKE_STATE_TTL", 3600))
 DB_PATH         = os.getenv("GUARDIAN_DB",     "guardian.db")
 
+# HMAC signing key for MQTT commands.
+# IMPORTANT: set this env var explicitly and copy the same value into every
+# agent's env so they can verify incoming commands.
+# If unset, a random key is generated at startup — agents won't be able to
+# verify commands until you set a stable shared key.
+COMMAND_SIGNING_KEY = os.getenv("COMMAND_SIGNING_KEY", "")
+if not COMMAND_SIGNING_KEY:
+    import secrets as _secrets
+    COMMAND_SIGNING_KEY = _secrets.token_hex(32)
+    print("[WARN] COMMAND_SIGNING_KEY not set — generated a random key. "
+          "Agents cannot verify commands until you set a stable shared key in .env")
+
+# Session token TTL (seconds). Default 30 minutes.
+SESSION_TTL_SECS = int(os.getenv("SESSION_TTL_SECS", 1800))
+
 NUKE_MAX_FAILS    = int(os.getenv("NUKE_MAX_FAILS",    5))
 NUKE_LOCKOUT_SECS = int(os.getenv("NUKE_LOCKOUT_SECS", 300))
 
 DASHBOARD_ORIGIN = os.getenv("DASHBOARD_ORIGIN", "")
 CORS_ORIGINS     = [DASHBOARD_ORIGIN] if DASHBOARD_ORIGIN else []
 
-# Dead-man's switch: alert if a device misses heartbeats for this many seconds
 WATCHDOG_TIMEOUT_SECS = int(os.getenv("WATCHDOG_TIMEOUT_SECS", 300))
 WATCHDOG_INTERVAL     = int(os.getenv("WATCHDOG_INTERVAL",     60))
 
-# Global auth rate-limiting (per client IP on require_auth)
 AUTH_MAX_FAILS    = int(os.getenv("AUTH_MAX_FAILS",    10))
 AUTH_WINDOW_SECS  = int(os.getenv("AUTH_WINDOW_SECS",  60))
 AUTH_LOCKOUT_SECS = int(os.getenv("AUTH_LOCKOUT_SECS", 300))
 
-# Expected agent versions — update when you ship new agents
 AGENT_VERSIONS = {
     "windows": "2.2.1",
     "mac":     "2.2.0",
@@ -175,7 +187,6 @@ def init_db():
                 PRIMARY KEY (token_hash, window_ts)
             )
         """)
-        # Per-device command log
         conn.execute("""
             CREATE TABLE IF NOT EXISTS command_log (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -189,14 +200,12 @@ def init_db():
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_cmdlog_device ON command_log(device_id)")
-        # Dead-man's switch: track which devices have already triggered a silence alert
         conn.execute("""
             CREATE TABLE IF NOT EXISTS watchdog_alerts (
                 device_id   TEXT PRIMARY KEY,
                 alerted_at  REAL NOT NULL
             )
         """)
-        # Global auth rate-limiting: per-IP attempt tracking
         conn.execute("""
             CREATE TABLE IF NOT EXISTS auth_fails (
                 ip           TEXT PRIMARY KEY,
@@ -206,6 +215,15 @@ def init_db():
             )
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_ip ON auth_fails(ip)")
+        # Session tokens — created by POST /auth/login, consumed by require_auth
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token      TEXT PRIMARY KEY,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)")
 
 # ---------------------------------------------------------------------------
 # DB HELPERS — devices / locations
@@ -218,8 +236,6 @@ def db_upsert_device(device_id: str, payload: dict):
             "ON CONFLICT(device_id) DO UPDATE SET payload=excluded.payload, last_seen=excluded.last_seen",
             (device_id, json.dumps(payload), now),
         )
-        # Device checked in — clear any active watchdog alert so we re-alert
-        # if it goes silent again later
         conn.execute("DELETE FROM watchdog_alerts WHERE device_id=?", (device_id,))
 
 def db_get_all_devices() -> list:
@@ -260,7 +276,6 @@ def db_log_command(command_id: str, device_id: str, command: str,
             " VALUES(?,?,?,?,?,?)",
             (command_id, device_id, command, json.dumps(params), "sent", issued_at),
         )
-        # Keep only the last 200 entries per device
         conn.execute(
             "DELETE FROM command_log WHERE device_id=? AND id NOT IN "
             "(SELECT id FROM command_log WHERE device_id=? ORDER BY id DESC LIMIT 200)",
@@ -268,7 +283,6 @@ def db_log_command(command_id: str, device_id: str, command: str,
         )
 
 def db_ack_command(device_id: str, command: str, status: str):
-    """Update the most recent matching command entry with ACK status."""
     with db_conn() as conn:
         conn.execute(
             "UPDATE command_log SET status=?, ack_at=? "
@@ -295,6 +309,37 @@ def db_get_command_log(device_id: str) -> list:
         }
         for r in rows
     ]
+
+# ---------------------------------------------------------------------------
+# DB HELPERS — session tokens
+# ---------------------------------------------------------------------------
+def db_create_session() -> str:
+    """Create a new session token, return the token string."""
+    token      = str(uuid.uuid4())
+    now        = time.time()
+    expires_at = now + SESSION_TTL_SECS
+    with db_conn() as conn:
+        # Purge expired sessions on every login (cheap cleanup)
+        conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))
+        conn.execute(
+            "INSERT INTO sessions(token, created_at, expires_at) VALUES(?,?,?)",
+            (token, now, expires_at),
+        )
+    return token
+
+def db_validate_session(token: str) -> bool:
+    """Return True if the token exists and has not expired."""
+    now = time.time()
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM sessions WHERE token=? AND expires_at > ?",
+            (token, now),
+        ).fetchone()
+    return row is not None
+
+def db_delete_session(token: str):
+    with db_conn() as conn:
+        conn.execute("DELETE FROM sessions WHERE token=?", (token,))
 
 # ---------------------------------------------------------------------------
 # DB HELPERS — nuke
@@ -399,18 +444,12 @@ def reset_nuke_fails(device_id: str):
 # RATE LIMITING — global auth (per IP)
 # ---------------------------------------------------------------------------
 def _get_client_ip(request: Request) -> str:
-    """
-    Resolve client IP.  Behind a reverse-proxy (nginx/caddy) the real IP
-    arrives in X-Forwarded-For; fall back to the direct connection address.
-    We take only the first entry in XFF to avoid spoofing via appended values.
-    """
     xff = request.headers.get("X-Forwarded-For", "")
     if xff:
         return xff.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 def check_auth_ratelimit(ip: str):
-    """Raise 429 if the IP is locked out. Must be called before credential checks."""
     with db_conn() as conn:
         row = conn.execute(
             "SELECT fail_count, window_start, locked_until FROM auth_fails WHERE ip=?", (ip,)
@@ -426,7 +465,6 @@ def check_auth_ratelimit(ip: str):
         )
 
 def record_auth_fail(ip: str):
-    """Increment fail counter; lock the IP if threshold exceeded within window."""
     now = time.time()
     with db_conn() as conn:
         row = conn.execute(
@@ -434,7 +472,6 @@ def record_auth_fail(ip: str):
         ).fetchone()
         if row:
             window_start = row["window_start"]
-            # Reset window if it has expired
             if now - window_start > AUTH_WINDOW_SECS:
                 new_count    = 1
                 window_start = now
@@ -452,7 +489,6 @@ def record_auth_fail(ip: str):
         )
 
 def reset_auth_fails(ip: str):
-    """Clear fail counter on successful authentication."""
     with db_conn() as conn:
         conn.execute("DELETE FROM auth_fails WHERE ip=?", (ip,))
 
@@ -493,50 +529,75 @@ def verify_totp(secret: str, token: str, window: int = 1) -> bool:
     return False
 
 # ---------------------------------------------------------------------------
+# COMMAND SIGNING (HMAC-SHA256)
+# ---------------------------------------------------------------------------
+def sign_command(command_id: str, command: str, issued_at: float) -> str:
+    """
+    Return an HMAC-SHA256 hex signature over 'command_id:command:issued_at'.
+    Agents verify this before executing any command, preventing injection
+    even if MQTT is intercepted.
+    """
+    msg = f"{command_id}:{command}:{issued_at}".encode()
+    return hmac.new(
+        COMMAND_SIGNING_KEY.encode(),
+        msg,
+        hashlib.sha256,
+    ).hexdigest()
+
+def verify_command_signature(command_id: str, command: str,
+                              issued_at: float, signature: str) -> bool:
+    """Constant-time comparison to verify a command signature."""
+    expected = sign_command(command_id, command, issued_at)
+    return hmac.compare_digest(expected, signature)
+
+# ---------------------------------------------------------------------------
 # AUTH
 # ---------------------------------------------------------------------------
 security = HTTPBearer()
+
+def _verify_legacy_token(token: str) -> bool:
+    """Validate a raw password:totp Bearer token (v2.4.0 format)."""
+    parts = token.split(":")
+    if len(parts) != 2:
+        return False
+    password, totp_code = parts
+    if password != MASTER_PASSWORD:
+        return False
+    if not verify_totp(TOTP_SECRET, totp_code):
+        return False
+    return True
 
 def require_auth(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ):
     """
-    Authenticate the request.
+    Accept either:
+      (a) Bearer <session_token>   — UUID issued by POST /auth/login
+      (b) Bearer <password:totp>   — legacy direct token (backward compat)
 
-    Flow:
-      1. Resolve client IP and check IP-level lockout (raises 429 if locked).
-      2. Validate token format (password:totp).
-      3. Validate password.
-      4. Validate TOTP.
-      On any failure: record the IP fail, raise 401.
-      On success: clear IP fail counter.
+    Rate-limiting applies to both paths.
     """
     ip = _get_client_ip(request)
-
-    # Step 1 — check lockout BEFORE any DB credential work
     check_auth_ratelimit(ip)
 
-    token  = credentials.credentials
-    parts  = token.split(":")
-    if len(parts) != 2:
-        record_auth_fail(ip)
-        raise HTTPException(status_code=401, detail="Invalid token format")
+    token = credentials.credentials
 
-    password, totp_code = parts
-
-    if password != MASTER_PASSWORD:
-        record_auth_fail(ip)
-        # Deliberate generic message — don't reveal which factor failed
-        raise HTTPException(status_code=401, detail="Authentication failed")
-
-    if not verify_totp(TOTP_SECRET, totp_code):
+    # Path (a): session token (UUID format — 36 chars with hyphens)
+    if re.match(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', token):
+        if db_validate_session(token):
+            reset_auth_fails(ip)
+            return True
         record_auth_fail(ip)
         raise HTTPException(status_code=401, detail="Authentication failed")
 
-    # Auth succeeded — reset IP fail counter
-    reset_auth_fails(ip)
-    return True
+    # Path (b): legacy password:totp
+    if _verify_legacy_token(token):
+        reset_auth_fails(ip)
+        return True
+
+    record_auth_fail(ip)
+    raise HTTPException(status_code=401, detail="Authentication failed")
 
 # ---------------------------------------------------------------------------
 # MQTT
@@ -598,6 +659,24 @@ def mqtt_connect():
     mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     mqtt_client.loop_start()
 
+def _publish_command(device_id: str, command: str, params: dict,
+                     command_id: str, issued_at: float, ttl: int):
+    """
+    Publish a signed command to the device's MQTT topic.
+    The 'sig' field is an HMAC-SHA256 signature over command_id:command:issued_at.
+    Agents MUST verify this signature before executing the command.
+    """
+    signature = sign_command(command_id, command, issued_at)
+    payload   = {
+        "command":   command,
+        "params":    params,
+        "issued_at": issued_at,
+        "ttl":       ttl,
+        "id":        command_id,
+        "sig":       signature,
+    }
+    mqtt_client.publish(f"guardian/{device_id}/command", json.dumps(payload), qos=1)
+
 # ---------------------------------------------------------------------------
 # NTFY
 # ---------------------------------------------------------------------------
@@ -617,13 +696,7 @@ async def ntfy_alert(title: str, message: str, priority: str = "urgent", tags: s
 # DEAD-MAN'S SWITCH WATCHDOG
 # ---------------------------------------------------------------------------
 async def watchdog_task():
-    """
-    Runs every WATCHDOG_INTERVAL seconds.
-    If a device's last_seen is older than WATCHDOG_TIMEOUT_SECS, fire one
-    ntfy alert. The alert is suppressed until the device checks back in
-    (db_upsert_device clears watchdog_alerts on heartbeat).
-    """
-    await asyncio.sleep(WATCHDOG_INTERVAL)  # wait for first heartbeats on startup
+    await asyncio.sleep(WATCHDOG_INTERVAL)
     while True:
         try:
             devices = db_get_all_devices()
@@ -643,7 +716,6 @@ async def watchdog_task():
                 silent_secs = now - last_seen_ts
                 if silent_secs < WATCHDOG_TIMEOUT_SECS:
                     continue
-                # Check if we've already alerted for this silence episode
                 with db_conn() as conn:
                     already = conn.execute(
                         "SELECT 1 FROM watchdog_alerts WHERE device_id=?", (device_id,)
@@ -686,17 +758,13 @@ async def nuke_countdown_task(device_id: str):
         elapsed = time.time() - state["started_at"]
         if elapsed >= state["countdown_seconds"]:
             print(f"[NUKE] Executing wipe for {device_id}")
-            mqtt_client.publish(
-                f"guardian/{device_id}/command",
-                json.dumps({"command": "location_burst", "issued_at": time.time(), "ttl": 60}),
-                qos=1,
-            )
+            burst_id  = str(uuid.uuid4())
+            burst_ts  = time.time()
+            _publish_command(device_id, "location_burst", {}, burst_id, burst_ts, 60)
             await asyncio.sleep(3)
-            mqtt_client.publish(
-                f"guardian/{device_id}/command",
-                json.dumps({"command": "wipe", "issued_at": time.time(), "ttl": COMMAND_TTL}),
-                qos=1,
-            )
+            wipe_id = str(uuid.uuid4())
+            wipe_ts = time.time()
+            _publish_command(device_id, "wipe", {}, wipe_id, wipe_ts, COMMAND_TTL)
             state["executed"] = True
             db_upsert_nuke_state(device_id, state)
             await ntfy_alert(
@@ -742,7 +810,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 # FASTAPI
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Guardian Relay", version="2.4.0", lifespan=lifespan)
+app = FastAPI(title="Guardian Relay", version="2.5.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -755,6 +823,13 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # MODELS
 # ---------------------------------------------------------------------------
+class LoginRequest(BaseModel):
+    password: str
+    totp:     str
+
+class LogoutRequest(BaseModel):
+    token: str
+
 class CommandRequest(BaseModel):
     device_id: str
     command:   str
@@ -769,24 +844,50 @@ class NukeAbortRequest(BaseModel):
     device_id: str
 
 # ---------------------------------------------------------------------------
+# ROUTES — auth
+# ---------------------------------------------------------------------------
+@app.post("/auth/login")
+async def login(req: LoginRequest, request: Request):
+    """
+    Exchange password + TOTP for a session token.
+
+    Returns:
+        { "token": "<uuid>", "expires_in": <seconds> }
+
+    The token should be sent as: Authorization: Bearer <token>
+    on all subsequent requests. It expires after SESSION_TTL_SECS seconds.
+    Call POST /auth/logout to invalidate it early.
+    """
+    ip = _get_client_ip(request)
+    check_auth_ratelimit(ip)
+
+    if req.password != MASTER_PASSWORD:
+        record_auth_fail(ip)
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
+    if not verify_totp(TOTP_SECRET, req.totp):
+        record_auth_fail(ip)
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
+    reset_auth_fails(ip)
+    token = db_create_session()
+    return {"token": token, "expires_in": SESSION_TTL_SECS}
+
+@app.post("/auth/logout")
+async def logout(req: LogoutRequest, _: bool = Depends(require_auth)):
+    """Invalidate a session token immediately."""
+    db_delete_session(req.token)
+    return {"status": "logged_out"}
+
+# ---------------------------------------------------------------------------
 # ROUTES — general
 # ---------------------------------------------------------------------------
 @app.get("/health", dependencies=[Depends(require_auth)])
 async def health():
-    """
-    Liveness probe — requires auth so the endpoint cannot be used to
-    fingerprint the server version or confirm it is a Guardian relay.
-    Version string intentionally omitted from the response.
-    """
     return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/agents/latest", dependencies=[Depends(require_auth)])
 async def agents_latest():
-    """
-    Return expected agent versions.
-    Requires auth — agent version info could assist targeted exploitation.
-    Agents must authenticate (same Bearer token) before calling this.
-    """
     return {"versions": AGENT_VERSIONS}
 
 @app.get("/devices", dependencies=[Depends(require_auth)])
@@ -800,7 +901,6 @@ async def get_location(device_id: str):
 
 @app.get("/devices/{device_id}/log", dependencies=[Depends(require_auth)])
 async def get_device_log(device_id: str):
-    """Return the last 100 commands sent to this device with their ACK status."""
     _validate_device_id(device_id)
     return {"log": db_get_command_log(device_id)}
 
@@ -809,14 +909,8 @@ async def send_command(req: CommandRequest):
     _validate_device_id(req.device_id)
     command_id = str(uuid.uuid4())
     issued_at  = time.time()
-    payload    = {
-        "command":   req.command,
-        "params":    req.params or {},
-        "issued_at": issued_at,
-        "ttl":       COMMAND_TTL,
-        "id":        command_id,
-    }
-    mqtt_client.publish(f"guardian/{req.device_id}/command", json.dumps(payload), qos=1)
+    _publish_command(req.device_id, req.command, req.params or {},
+                     command_id, issued_at, COMMAND_TTL)
     db_log_command(command_id, req.device_id, req.command, req.params or {}, issued_at)
     return {"status": "sent", "command_id": command_id}
 
@@ -874,9 +968,9 @@ async def nuke_init(req: NukeInitRequest):
             priority="urgent", tags="rotating_light,bomb",
         )
         return {
-            "status":           "nuke_armed",
+            "status":            "nuke_armed",
             "countdown_seconds": NUKE_COUNTDOWN,
-            "message":          "Wipe will execute in 10 minutes. Abort from dashboard.",
+            "message":           "Wipe will execute in 10 minutes. Abort from dashboard.",
         }
 
     raise HTTPException(status_code=400, detail="Invalid step")
