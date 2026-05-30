@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
 """
-Guardian Relay Server v2.3.0
+Guardian Relay Server v2.4.0
 FastAPI + MQTT relay with nuke system, TOTP auth, ntfy.sh alerts, command TTL
+
+Changes in v2.4.0:
+- Security hardening: /health and /agents/latest now require auth so the
+  server version and agent metadata are no longer exposed to unauthenticated
+  callers. The /health response no longer includes the version string.
+- Global auth rate-limiting: require_auth now tracks failed attempts by
+  client IP (X-Forwarded-For → fallback to direct IP). After
+  AUTH_MAX_FAILS (default 10) failures within AUTH_WINDOW_SECS (default 60s)
+  the IP is locked out for AUTH_LOCKOUT_SECS (default 300s). State is stored
+  in the auth_fails table (in-memory dict with DB-backed persistence on
+  startup/shutdown would add complexity; SQLite table is sufficient for a
+  single-process deployment).
 
 Changes in v2.3.0:
 - Dead-man's switch: background watchdog checks every 60s; if a device misses
@@ -67,6 +79,11 @@ CORS_ORIGINS     = [DASHBOARD_ORIGIN] if DASHBOARD_ORIGIN else []
 # Dead-man's switch: alert if a device misses heartbeats for this many seconds
 WATCHDOG_TIMEOUT_SECS = int(os.getenv("WATCHDOG_TIMEOUT_SECS", 300))
 WATCHDOG_INTERVAL     = int(os.getenv("WATCHDOG_INTERVAL",     60))
+
+# Global auth rate-limiting (per client IP on require_auth)
+AUTH_MAX_FAILS    = int(os.getenv("AUTH_MAX_FAILS",    10))
+AUTH_WINDOW_SECS  = int(os.getenv("AUTH_WINDOW_SECS",  60))
+AUTH_LOCKOUT_SECS = int(os.getenv("AUTH_LOCKOUT_SECS", 300))
 
 # Expected agent versions — update when you ship new agents
 AGENT_VERSIONS = {
@@ -179,6 +196,16 @@ def init_db():
                 alerted_at  REAL NOT NULL
             )
         """)
+        # Global auth rate-limiting: per-IP attempt tracking
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS auth_fails (
+                ip           TEXT PRIMARY KEY,
+                fail_count   INTEGER NOT NULL DEFAULT 0,
+                window_start REAL NOT NULL DEFAULT 0,
+                locked_until REAL NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_ip ON auth_fails(ip)")
 
 # ---------------------------------------------------------------------------
 # DB HELPERS — devices / locations
@@ -334,7 +361,7 @@ def db_delete_nuke_session(device_id: str):
         conn.execute("DELETE FROM nuke_sessions WHERE device_id=?", (device_id,))
 
 # ---------------------------------------------------------------------------
-# RATE LIMITING
+# RATE LIMITING — nuke
 # ---------------------------------------------------------------------------
 def check_nuke_ratelimit(device_id: str):
     with db_conn() as conn:
@@ -367,6 +394,67 @@ def record_nuke_fail(device_id: str):
 def reset_nuke_fails(device_id: str):
     with db_conn() as conn:
         conn.execute("DELETE FROM nuke_fails WHERE device_id=?", (device_id,))
+
+# ---------------------------------------------------------------------------
+# RATE LIMITING — global auth (per IP)
+# ---------------------------------------------------------------------------
+def _get_client_ip(request: Request) -> str:
+    """
+    Resolve client IP.  Behind a reverse-proxy (nginx/caddy) the real IP
+    arrives in X-Forwarded-For; fall back to the direct connection address.
+    We take only the first entry in XFF to avoid spoofing via appended values.
+    """
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+def check_auth_ratelimit(ip: str):
+    """Raise 429 if the IP is locked out. Must be called before credential checks."""
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT fail_count, window_start, locked_until FROM auth_fails WHERE ip=?", (ip,)
+        ).fetchone()
+    if not row:
+        return
+    now = time.time()
+    if now < row["locked_until"]:
+        remaining = int(row["locked_until"] - now)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Too many failed auth attempts. Try again in {remaining}s.",
+        )
+
+def record_auth_fail(ip: str):
+    """Increment fail counter; lock the IP if threshold exceeded within window."""
+    now = time.time()
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT fail_count, window_start, locked_until FROM auth_fails WHERE ip=?", (ip,)
+        ).fetchone()
+        if row:
+            window_start = row["window_start"]
+            # Reset window if it has expired
+            if now - window_start > AUTH_WINDOW_SECS:
+                new_count    = 1
+                window_start = now
+            else:
+                new_count = row["fail_count"] + 1
+        else:
+            new_count    = 1
+            window_start = now
+        locked_until = (now + AUTH_LOCKOUT_SECS) if new_count >= AUTH_MAX_FAILS else 0.0
+        conn.execute(
+            "INSERT INTO auth_fails(ip, fail_count, window_start, locked_until) VALUES(?,?,?,?) "
+            "ON CONFLICT(ip) DO UPDATE SET "
+            "fail_count=excluded.fail_count, window_start=excluded.window_start, locked_until=excluded.locked_until",
+            (ip, new_count, window_start, locked_until),
+        )
+
+def reset_auth_fails(ip: str):
+    """Clear fail counter on successful authentication."""
+    with db_conn() as conn:
+        conn.execute("DELETE FROM auth_fails WHERE ip=?", (ip,))
 
 # ---------------------------------------------------------------------------
 # TOTP
@@ -409,16 +497,45 @@ def verify_totp(secret: str, token: str, window: int = 1) -> bool:
 # ---------------------------------------------------------------------------
 security = HTTPBearer()
 
-def require_auth(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def require_auth(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+):
+    """
+    Authenticate the request.
+
+    Flow:
+      1. Resolve client IP and check IP-level lockout (raises 429 if locked).
+      2. Validate token format (password:totp).
+      3. Validate password.
+      4. Validate TOTP.
+      On any failure: record the IP fail, raise 401.
+      On success: clear IP fail counter.
+    """
+    ip = _get_client_ip(request)
+
+    # Step 1 — check lockout BEFORE any DB credential work
+    check_auth_ratelimit(ip)
+
     token  = credentials.credentials
     parts  = token.split(":")
     if len(parts) != 2:
+        record_auth_fail(ip)
         raise HTTPException(status_code=401, detail="Invalid token format")
+
     password, totp_code = parts
+
     if password != MASTER_PASSWORD:
-        raise HTTPException(status_code=401, detail="Invalid password")
+        record_auth_fail(ip)
+        # Deliberate generic message — don't reveal which factor failed
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
     if not verify_totp(TOTP_SECRET, totp_code):
-        raise HTTPException(status_code=401, detail="Invalid TOTP")
+        record_auth_fail(ip)
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
+    # Auth succeeded — reset IP fail counter
+    reset_auth_fails(ip)
     return True
 
 # ---------------------------------------------------------------------------
@@ -625,7 +742,7 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 # FASTAPI
 # ---------------------------------------------------------------------------
-app = FastAPI(title="Guardian Relay", version="2.3.0", lifespan=lifespan)
+app = FastAPI(title="Guardian Relay", version="2.4.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -654,13 +771,22 @@ class NukeAbortRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # ROUTES — general
 # ---------------------------------------------------------------------------
-@app.get("/health")
+@app.get("/health", dependencies=[Depends(require_auth)])
 async def health():
-    return {"status": "ok", "version": "2.3.0", "time": datetime.now(timezone.utc).isoformat()}
+    """
+    Liveness probe — requires auth so the endpoint cannot be used to
+    fingerprint the server version or confirm it is a Guardian relay.
+    Version string intentionally omitted from the response.
+    """
+    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
 
-@app.get("/agents/latest")
+@app.get("/agents/latest", dependencies=[Depends(require_auth)])
 async def agents_latest():
-    """Return expected agent versions. Agents call this on startup to detect staleness."""
+    """
+    Return expected agent versions.
+    Requires auth — agent version info could assist targeted exploitation.
+    Agents must authenticate (same Bearer token) before calling this.
+    """
     return {"versions": AGENT_VERSIONS}
 
 @app.get("/devices", dependencies=[Depends(require_auth)])
