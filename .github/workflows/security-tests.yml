@@ -30,4 +30,4 @@ jobs:
           python -m pip install -r vps-setup/requirements.txt pytest
 
       - name: Run isolated security regression tests
-        run: pytest -q tests/test_generic_command_allowlist.py
+        run: pytest -q tests/
