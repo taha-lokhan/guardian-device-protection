@@ -464,7 +464,7 @@ def db_purge_stale_nuke_states():
     cutoff = time.time() - NUKE_STATE_TTL
     with db_conn() as conn:
         conn.execute(
-            "DELETE FROM nuke_state WHERE (aborted=1 OR executed=1) AND started_at < ?",
+            "DELETE FROM nuke_state WHERE (aborted=1 OR executed=1 OR execution_claimed=1) AND started_at < ?",
             (cutoff,),
         )
 
