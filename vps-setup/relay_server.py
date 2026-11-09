@@ -457,20 +457,28 @@ def db_mark_outbox_broker_acked(command_id: str):
 
 def db_mark_outbox_device_acked(device_id: str, command_id: str,
                                 command: str, device_status: str) -> bool:
+    """Record a correlated device ACK without conflating receipt with completion.
+
+    A wipe is complete only when the device explicitly reports status=completed.
+    An initial status such as initiating/accepted remains device_acknowledged.
+    """
     now = time.time()
+    is_wipe_completion = command == "wipe" and device_status == "completed"
+    target_status = "device_completed" if is_wipe_completion else "device_acknowledged"
+    allowed_previous = (
+        "'pending','publishing','broker_acked','uncertain','device_acknowledged'"
+        if is_wipe_completion else
+        "'pending','publishing','broker_acked','uncertain'"
+    )
     with db_conn() as conn:
         cursor = conn.execute(
-            "UPDATE command_outbox SET status='device_acknowledged', device_acked_at=?, "
-            "updated_at=?, last_error=NULL "
+            "UPDATE command_outbox SET status=?, device_acked_at=COALESCE(device_acked_at, ?), "
+            "updated_at=?, last_error=? "
             "WHERE command_id=? AND device_id=? AND command=? "
-            "AND status IN ('pending','publishing','broker_acked','uncertain')",
-            (now, now, command_id, device_id, command),
+            f"AND status IN ({allowed_previous})",
+            (target_status, now, now, f"device_status={device_status[:120]}",
+             command_id, device_id, command),
         )
-        if cursor.rowcount == 1:
-            conn.execute(
-                "UPDATE command_outbox SET last_error=? WHERE command_id=?",
-                (f"device_status={device_status[:120]}", command_id),
-            )
         return cursor.rowcount == 1
 
 
@@ -995,7 +1003,7 @@ def on_message(client, userdata, msg):
             db_mark_outbox_device_acked(device_id, command_id, cmd, status)
         # Only an explicit device completion acknowledgement may mark a wipe
         # executed. An "initiating" or receipt ACK is not proof of completion.
-        if cmd == "wipe_complete" and status == "completed" and isinstance(command_id, str):
+        if cmd in ("wipe", "wipe_complete") and status == "completed" and isinstance(command_id, str):
             state = db_get_nuke_state(device_id)
             if state and not state.get("aborted"):
                 state["executed"] = True
