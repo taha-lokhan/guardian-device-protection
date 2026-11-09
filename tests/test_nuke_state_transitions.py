@@ -4,6 +4,7 @@ All persistence is isolated to a temporary SQLite database. MQTT publishing is
 mocked; no real device receives a command and no wipe is executed.
 """
 import asyncio
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -106,3 +107,24 @@ def test_wipe_is_dispatched_only_after_atomic_execution_claim(isolated_db, monke
     assert state["execution_claimed"] is True
     assert state["executed"] is False  # completion is recorded only by device ACK
     assert state["active"] is False
+
+
+
+def test_existing_database_gets_execution_claimed_migration(tmp_path, monkeypatch):
+    db_path = tmp_path / "legacy.db"
+    monkeypatch.setattr(relay, "DB_PATH", str(db_path))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("""
+            CREATE TABLE nuke_state (
+                device_id TEXT PRIMARY KEY,
+                active INTEGER NOT NULL DEFAULT 1,
+                started_at REAL NOT NULL,
+                aborted INTEGER NOT NULL DEFAULT 0,
+                executed INTEGER NOT NULL DEFAULT 0,
+                countdown_secs INTEGER NOT NULL
+            )
+        """)
+    relay.init_db()
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(nuke_state)")}
+    assert "execution_claimed" in columns
