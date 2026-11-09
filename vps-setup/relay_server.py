@@ -432,6 +432,28 @@ def db_get_nuke_state(device_id: str) -> Optional[dict]:
         "countdown_seconds": row["countdown_secs"],
     }
 
+def db_abort_nuke_state(device_id: str) -> bool:
+    """Atomically win the abort race only while a wipe has not been claimed."""
+    with db_conn() as conn:
+        cursor = conn.execute(
+            "UPDATE nuke_state SET aborted=1, active=0 "
+            "WHERE device_id=? AND active=1 AND aborted=0 AND executed=0",
+            (device_id,),
+        )
+        return cursor.rowcount == 1
+
+
+def db_claim_nuke_execution(device_id: str) -> bool:
+    """Atomically claim the one-way wipe transition; only one task can win."""
+    with db_conn() as conn:
+        cursor = conn.execute(
+            "UPDATE nuke_state SET executed=1, active=0 "
+            "WHERE device_id=? AND active=1 AND aborted=0 AND executed=0",
+            (device_id,),
+        )
+        return cursor.rowcount == 1
+
+
 def db_purge_stale_nuke_states():
     cutoff = time.time() - NUKE_STATE_TTL
     with db_conn() as conn:
@@ -837,27 +859,33 @@ async def nuke_countdown_task(device_id: str):
     while True:
         await asyncio.sleep(5)
         state = db_get_nuke_state(device_id)
-        if not state:
+        if not state or not state.get("active"):
             return
-        if state.get("aborted"):
-            print(f"[NUKE] Aborted for {device_id}")
+        if state.get("aborted") or state.get("executed"):
+            print(f"[NUKE] No longer active for {device_id}")
             return
         elapsed = time.time() - state["started_at"]
         if elapsed >= state["countdown_seconds"]:
-            print(f"[NUKE] Executing wipe for {device_id}")
+            # This is still an abortable phase. Do not mark the wipe executed yet.
+            print(f"[NUKE] Countdown elapsed; starting final abortable window for {device_id}")
             burst_id = str(uuid.uuid4())
             burst_ts = time.time()
             _publish_command(device_id, "location_burst", {}, burst_id, burst_ts, 60)
             await asyncio.sleep(3)
+
+            # The abort endpoint and this claim compete through conditional SQL
+            # updates. Exactly one can transition the active state.
+            if not db_claim_nuke_execution(device_id):
+                print(f"[NUKE] Wipe cancelled or already claimed for {device_id}")
+                return
+
             wipe_id = str(uuid.uuid4())
             wipe_ts = time.time()
             _publish_command(device_id, "wipe", {}, wipe_id, wipe_ts, COMMAND_TTL)
-            state["executed"] = True
-            db_upsert_nuke_state(device_id, state)
             audit("nuke.executed", device_id=device_id)
             await ntfy_alert(
-                title=f"WIPE EXECUTED — {device_id}",
-                message=f"Guardian wiped {device_id} at {datetime.now(timezone.utc).isoformat()}",
+                title=f"WIPE COMMAND DISPATCHED — {device_id}",
+                message=f"Guardian dispatched the wipe command for {device_id} at {datetime.now(timezone.utc).isoformat()}. Device-side completion must be confirmed separately.",
                 priority="urgent", tags="fire,skull",
             )
             return
@@ -1112,14 +1140,18 @@ async def nuke_init(req: NukeInitRequest, request: Request):
 async def nuke_abort(req: NukeAbortRequest, request: Request):
     _validate_device_id(req.device_id)
     state = db_get_nuke_state(req.device_id)
-    if not state or not state.get("active"):
-        raise HTTPException(status_code=404, detail="No active nuke for this device")
-    if state.get("executed"):
-        raise HTTPException(status_code=409, detail="Wipe already executed — cannot abort")
+    if not state:
+        raise HTTPException(status_code=404, detail="No nuke state for this device")
     if state.get("aborted"):
         return {"status": "already_aborted"}
-    state["aborted"] = True
-    db_upsert_nuke_state(req.device_id, state)
+    if state.get("executed") or not state.get("active"):
+        raise HTTPException(status_code=409, detail="Wipe execution has already been claimed or is no longer abortable")
+    if not db_abort_nuke_state(req.device_id):
+        # Re-read after the conditional update loses a race with execution.
+        latest = db_get_nuke_state(req.device_id)
+        if latest and latest.get("aborted"):
+            return {"status": "already_aborted"}
+        raise HTTPException(status_code=409, detail="Wipe execution has already been claimed; abort was too late")
     ip = _get_client_ip(request)
     audit("nuke.aborted", actor_ip=ip, device_id=req.device_id)
     await ntfy_alert(
