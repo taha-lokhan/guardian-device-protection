@@ -50,7 +50,8 @@ def test_execution_claim_can_only_be_won_once(isolated_db):
     assert relay.db_abort_nuke_state("test-device") is False
 
     state = relay.db_get_nuke_state("test-device")
-    assert state["executed"] is True
+    assert state["execution_claimed"] is True
+    assert state["executed"] is False
     assert state["aborted"] is False
     assert state["active"] is False
 
