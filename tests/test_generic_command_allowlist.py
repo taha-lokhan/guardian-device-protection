@@ -26,7 +26,7 @@ def harness(monkeypatch, tmp_path):
         lambda *args, **kwargs: published.append((args, kwargs)),
     )
     monkeypatch.setattr(relay, "db_log_command", lambda *args, **kwargs: None)
-    monkeypatch.setattr(relay, "db_enqueue_outbox_command", lambda *args, **kwargs: None)
+    monkeypatch.setattr(relay, "db_enqueue_outbox_command", lambda *args, **kwargs: published.append((args, kwargs)))
     monkeypatch.setattr(
         relay, "audit",
         lambda *args, **kwargs: audit_events.append((args, kwargs)),
