@@ -1302,12 +1302,15 @@ async def send_command(req: CommandRequest, request: Request):
 
     command_id = str(uuid.uuid4())
     issued_at  = time.time()
-    _publish_command(req.device_id, req.command, req.params or {},
-                     command_id, issued_at, COMMAND_TTL)
+    db_enqueue_outbox_command(
+        req.device_id, req.command, req.params or {},
+        command_id, issued_at, COMMAND_TTL,
+        destructive=False,
+    )
     db_log_command(command_id, req.device_id, req.command, req.params or {}, issued_at)
-    audit("command.sent", actor_ip=ip, device_id=req.device_id,
+    audit("command.queued", actor_ip=ip, device_id=req.device_id,
           detail=f"cmd={req.command} id={command_id}")
-    return {"status": "sent", "command_id": command_id}
+    return {"status": "queued", "command_id": command_id}
 
 @app.get("/audit", dependencies=[Depends(require_auth)])
 async def get_audit_log():
