@@ -20,6 +20,14 @@ def isolated_db(monkeypatch, tmp_path):
     relay.init_db()
 
 
+def outbox_commands():
+    with sqlite3.connect(relay.DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT command, status FROM command_outbox ORDER BY created_at, command_id"
+        ).fetchall()
+    return rows
+
+
 def arm(device_id="test-device", *, started_at=0, countdown=1):
     relay.db_upsert_nuke_state(device_id, {
         "active": True,
@@ -58,13 +66,7 @@ def test_execution_claim_can_only_be_won_once(isolated_db):
 
 def test_abort_during_final_grace_window_prevents_wipe(isolated_db, monkeypatch):
     arm()
-    published = []
     sleeps = 0
-
-    monkeypatch.setattr(
-        relay, "_publish_command",
-        lambda device_id, command, *args, **kwargs: published.append(command),
-    )
 
     async def controlled_sleep(_seconds):
         nonlocal sleeps
@@ -77,7 +79,7 @@ def test_abort_during_final_grace_window_prevents_wipe(isolated_db, monkeypatch)
 
     asyncio.run(relay.nuke_countdown_task("test-device"))
 
-    assert published == ["location_burst"]
+    assert [row[0] for row in outbox_commands()] == ["location_burst"]
     state = relay.db_get_nuke_state("test-device")
     assert state["aborted"] is True
     assert state["executed"] is False
@@ -85,13 +87,6 @@ def test_abort_during_final_grace_window_prevents_wipe(isolated_db, monkeypatch)
 
 def test_wipe_is_dispatched_only_after_atomic_execution_claim(isolated_db, monkeypatch):
     arm()
-    published = []
-
-    monkeypatch.setattr(
-        relay, "_publish_command",
-        lambda device_id, command, *args, **kwargs: published.append(command),
-    )
-
     async def no_wait(_seconds):
         return None
 
@@ -103,7 +98,8 @@ def test_wipe_is_dispatched_only_after_atomic_execution_claim(isolated_db, monke
 
     asyncio.run(relay.nuke_countdown_task("test-device"))
 
-    assert published == ["location_burst", "wipe"]
+    assert [row[0] for row in outbox_commands()] == ["location_burst", "wipe"]
+    assert all(row[1] == "pending" for row in outbox_commands())
     state = relay.db_get_nuke_state("test-device")
     assert state["execution_claimed"] is True
     assert state["executed"] is False  # completion is recorded only by device ACK
