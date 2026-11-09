@@ -1,0 +1,69 @@
+name: Guardian agent build checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "security/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build Windows agent
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: python -m pip install -r windows-agent/requirements.txt pyinstaller
+      - name: Compile and build executable
+        working-directory: windows-agent
+        run: |
+          python -m compileall -q guardian_windows_agent.py
+          python -m PyInstaller --onefile --noconsole --name guardian_windows_agent guardian_windows_agent.py
+      - name: Verify executable exists
+        run: |
+          if (!(Test-Path "windows-agent/dist/guardian_windows_agent.exe")) { throw "Windows agent executable was not produced" }
+      - name: Upload Windows agent artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardian-windows-agent
+          path: windows-agent/dist/guardian_windows_agent.exe
+
+  build-macos:
+    name: Build macOS agent
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build dependencies
+        run: python -m pip install -r mac-agent/requirements.txt pyinstaller
+      - name: Compile and build executable
+        working-directory: mac-agent
+        run: |
+          python -m compileall -q guardian_mac_agent.py
+          python -m PyInstaller --onefile --name guardian_mac_agent guardian_mac_agent.py
+      - name: Package installer script
+        working-directory: mac-agent
+        run: |
+          cp install_mac.sh dist/install_mac.sh
+          cd dist
+          zip -r guardian-mac-agent.zip guardian_mac_agent install_mac.sh
+      - name: Verify archive exists
+        run: test -s mac-agent/dist/guardian-mac-agent.zip
+      - name: Upload macOS agent artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardian-macos-agent
+          path: mac-agent/dist/guardian-mac-agent.zip
