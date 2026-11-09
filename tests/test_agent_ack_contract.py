@@ -53,3 +53,15 @@ def test_android_abort_command_acknowledges_its_own_id():
         "android-app/app/src/main/java/com/guardian/agent/GuardianService.kt"
     )
     assert 'sendAck("abort_wipe", "flag_set", commandId)' in android
+
+
+def test_abort_flags_are_initialized_before_wipe_workers_start():
+    windows = source("windows-agent/guardian_windows_agent.py")
+    macos = source("mac-agent/guardian_mac_agent.py")
+    android = source(
+        "android-app/app/src/main/java/com/guardian/agent/GuardianService.kt"
+    )
+
+    assert 'elif command == "wipe":\n        _wipe_abort_flag.clear()\n        def do_wipe():' in windows
+    assert 'elif command == "wipe":\n        _wipe_abort_flag.clear()' in macos
+    assert 'wipeAbortRequested = false\n                Thread { doWipeWithAbort(commandId) }.start()' in android
