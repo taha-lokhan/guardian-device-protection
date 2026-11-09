@@ -164,6 +164,16 @@ class GuardianService : Service() {
         }
     }
 
+    private fun sendAck(command: String, status: String, commandId: String?) {
+        val ack = JSONObject().apply {
+            put("command", command)
+            put("status", status)
+            put("ts", System.currentTimeMillis())
+            if (!commandId.isNullOrBlank()) put("id", commandId)
+        }
+        mqttPublish("guardian/$DEVICE_ID/ack", ack.toString())
+    }
+
     private fun startHeartbeat() {
         heartbeatTimer = Timer()
         heartbeatTimer!!.scheduleAtFixedRate(object : TimerTask() {
@@ -196,25 +206,26 @@ class GuardianService : Service() {
             Log.w("Guardian", "Command expired (age=${age}s > ttl=${ttl}s), ignored")
             return
         }
+        val commandId = cmd.optString("id").takeIf { it.isNotBlank() }
         when (cmd.optString("command")) {
-            "locate", "location" -> lastLocation?.let { publishLocation(it) }
+            "locate", "location" -> {
+                lastLocation?.let { publishLocation(it) }
+                sendAck("location", "ok", commandId)
+            }
             "location_burst" -> Thread {
                 repeat(5) {
                     lastLocation?.let { publishLocation(it) }
                     Thread.sleep(2_000L)
                 }
+                sendAck("location_burst", "ok", commandId)
             }.start()
-            "status" -> sendHeartbeat()
-            "ping" -> mqttPublish(
-                "guardian/$DEVICE_ID/ack",
-                JSONObject().apply {
-                    put("command", "ping")
-                    put("status", "pong")
-                    put("ts", System.currentTimeMillis())
-                }.toString()
-            )
-            "lock" -> lockDevice()
-            "backup" -> doBackup()
+            "status" -> {
+                sendHeartbeat()
+                sendAck("status", "ok", commandId)
+            }
+            "ping" -> sendAck("ping", "pong", commandId)
+            "lock" -> lockDevice(commandId)
+            "backup" -> doBackup(commandId)
             "abort_wipe" -> {
                 wipeAbortRequested = true
                 getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
@@ -268,34 +279,20 @@ class GuardianService : Service() {
         doWipe()
     }
 
-    private fun lockDevice() {
+    private fun lockDevice(commandId: String?) {
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val admin = ComponentName(this, GuardianAdminReceiver::class.java)
         if (dpm.isAdminActive(admin)) {
             dpm.lockNow()
-            mqttPublish(
-                "guardian/$DEVICE_ID/ack",
-                JSONObject().apply {
-                    put("command", "lock")
-                    put("status", "ok")
-                    put("ts", System.currentTimeMillis())
-                }.toString()
-            )
+            sendAck("lock", "ok", commandId)
         } else {
             Log.e("Guardian", "Cannot lock — Device Admin not active")
         }
     }
 
-    private fun doBackup() {
+    private fun doBackup(commandId: String?) {
         // Stub — real backup implementation to be added
-        mqttPublish(
-            "guardian/$DEVICE_ID/ack",
-            JSONObject().apply {
-                put("command", "backup")
-                put("status", "stub_not_implemented")
-                put("ts", System.currentTimeMillis())
-            }.toString()
-        )
+        sendAck("backup", "stub_not_implemented", commandId)
     }
 
     private fun doWipe() {
