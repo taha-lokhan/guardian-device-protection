@@ -889,7 +889,7 @@ async def nuke_countdown_task(device_id: str):
             wipe_id = str(uuid.uuid4())
             wipe_ts = time.time()
             _publish_command(device_id, "wipe", {}, wipe_id, wipe_ts, COMMAND_TTL)
-            audit("nuke.executed", device_id=device_id)
+            audit("nuke.command_dispatched", device_id=device_id)
             await ntfy_alert(
                 title=f"WIPE COMMAND DISPATCHED — {device_id}",
                 message=f"Guardian dispatched the wipe command for {device_id} at {datetime.now(timezone.utc).isoformat()}. Device-side completion must be confirmed separately.",
