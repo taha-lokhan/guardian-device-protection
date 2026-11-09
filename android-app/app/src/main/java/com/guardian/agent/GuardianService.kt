@@ -59,14 +59,7 @@ class GuardianService : Service() {
             Log.i("Guardian", "Wipe abort requested via notification")
             getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
             updateNotification("Wipe aborted")
-            mqttPublish(
-                "guardian/$DEVICE_ID/ack",
-                JSONObject().apply {
-                    put("command", "wipe_complete")
-                    put("status", "aborted_locally")
-                    put("ts", System.currentTimeMillis())
-                }.toString()
-            )
+            // The active wipe worker reports the correlated wipe command ID.
         }
         return START_STICKY
     }
@@ -230,22 +223,19 @@ class GuardianService : Service() {
                 wipeAbortRequested = true
                 getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
                 updateNotification("Wipe aborted remotely")
-                mqttPublish(
-                    "guardian/$DEVICE_ID/ack",
-                    JSONObject().apply {
-                        put("command", "wipe_complete")
-                        put("status", "aborted_locally")
-                        put("ts", System.currentTimeMillis())
-                    }.toString()
-                )
+                sendAck("abort_wipe", "flag_set", commandId)
             }
-            "wipe" -> Thread { doWipeWithAbort() }.start()
+            "wipe" -> {
+                // Set the flag before starting the worker so an immediate remote
+                // abort cannot be overwritten by the worker's initialization.
+                wipeAbortRequested = false
+                Thread { doWipeWithAbort(commandId) }.start()
+            }
             else -> Log.w("Guardian", "Unknown command: ${cmd.optString("command")}")
         }
     }
 
-    private fun doWipeWithAbort() {
-        wipeAbortRequested = false
+    private fun doWipeWithAbort(commandId: String?) {
         val abortIntent = Intent(this, GuardianService::class.java).apply { action = ACTION_ABORT_WIPE }
         wipeCancelIntent = PendingIntent.getService(
             this, 99, abortIntent,
@@ -265,6 +255,7 @@ class GuardianService : Service() {
                 Log.i("Guardian", "Wipe aborted at ${i * 5}s remaining")
                 getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
                 updateNotification("Wipe aborted")
+                sendAck("wipe", "aborted_locally", commandId)
                 return
             }
             Thread.sleep(5_000L)
@@ -272,11 +263,12 @@ class GuardianService : Service() {
         if (wipeAbortRequested) {
             getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
             updateNotification("Wipe aborted")
+            sendAck("wipe", "aborted_locally", commandId)
             return
         }
         Log.i("Guardian", "Wipe countdown complete — executing")
         getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
-        doWipe()
+        doWipe(commandId)
     }
 
     private fun lockDevice(commandId: String?) {
@@ -295,22 +287,23 @@ class GuardianService : Service() {
         sendAck("backup", "stub_not_implemented", commandId)
     }
 
-    private fun doWipe() {
+    private fun doWipe(commandId: String?) {
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val admin = ComponentName(this, GuardianAdminReceiver::class.java)
         if (dpm.isAdminActive(admin)) {
-            mqttPublish(
-                "guardian/$DEVICE_ID/ack",
-                JSONObject().apply {
-                    put("command", "wipe_complete")
-                    put("status", "initiating")
-                    put("ts", System.currentTimeMillis())
-                }.toString()
-            )
-            Thread.sleep(2_000L)
-            dpm.wipeData(DevicePolicyManager.WIPE_EXTERNAL_STORAGE)
+            // This acknowledges initiation only; Android does not provide a
+            // post-reset callback proving that the wipe completed.
+            sendAck("wipe", "initiating", commandId)
+            try {
+                Thread.sleep(2_000L)
+                dpm.wipeData(DevicePolicyManager.WIPE_EXTERNAL_STORAGE)
+            } catch (e: Exception) {
+                Log.e("Guardian", "Wipe request failed: $e")
+                sendAck("wipe", "failed", commandId)
+            }
         } else {
             Log.e("Guardian", "Cannot wipe — Device Admin not active")
+            sendAck("wipe", "failed", commandId)
         }
     }
 
