@@ -162,9 +162,14 @@ def init_db():
                 started_at       REAL NOT NULL,
                 aborted          INTEGER NOT NULL DEFAULT 0,
                 executed         INTEGER NOT NULL DEFAULT 0,
+                execution_claimed INTEGER NOT NULL DEFAULT 0,
                 countdown_secs   INTEGER NOT NULL
             )
         """)
+        # Backward-compatible migration for existing installations.
+        nuke_columns = {row["name"] for row in conn.execute("PRAGMA table_info(nuke_state)")}
+        if "execution_claimed" not in nuke_columns:
+            conn.execute("ALTER TABLE nuke_state ADD COLUMN execution_claimed INTEGER NOT NULL DEFAULT 0")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS nuke_sessions (
                 device_id        TEXT PRIMARY KEY,
@@ -429,6 +434,7 @@ def db_get_nuke_state(device_id: str) -> Optional[dict]:
         "started_at":        row["started_at"],
         "aborted":           bool(row["aborted"]),
         "executed":          bool(row["executed"]),
+        "execution_claimed": bool(row["execution_claimed"]),
         "countdown_seconds": row["countdown_secs"],
     }
 
@@ -437,7 +443,7 @@ def db_abort_nuke_state(device_id: str) -> bool:
     with db_conn() as conn:
         cursor = conn.execute(
             "UPDATE nuke_state SET aborted=1, active=0 "
-            "WHERE device_id=? AND active=1 AND aborted=0 AND executed=0",
+            "WHERE device_id=? AND active=1 AND aborted=0 AND executed=0 AND execution_claimed=0",
             (device_id,),
         )
         return cursor.rowcount == 1
@@ -447,8 +453,8 @@ def db_claim_nuke_execution(device_id: str) -> bool:
     """Atomically claim the one-way wipe transition; only one task can win."""
     with db_conn() as conn:
         cursor = conn.execute(
-            "UPDATE nuke_state SET executed=1, active=0 "
-            "WHERE device_id=? AND active=1 AND aborted=0 AND executed=0",
+            "UPDATE nuke_state SET execution_claimed=1, active=0 "
+            "WHERE device_id=? AND active=1 AND aborted=0 AND executed=0 AND execution_claimed=0",
             (device_id,),
         )
         return cursor.rowcount == 1
@@ -758,6 +764,7 @@ def on_message(client, userdata, msg):
             state = db_get_nuke_state(device_id)
             if state and not state.get("aborted"):
                 state["executed"] = True
+                state["active"] = False
                 db_upsert_nuke_state(device_id, state)
         print(f"[ACK] {device_id} -> {cmd}: {status}")
 
@@ -861,7 +868,7 @@ async def nuke_countdown_task(device_id: str):
         state = db_get_nuke_state(device_id)
         if not state or not state.get("active"):
             return
-        if state.get("aborted") or state.get("executed"):
+        if state.get("aborted") or state.get("executed") or state.get("execution_claimed"):
             print(f"[NUKE] No longer active for {device_id}")
             return
         elapsed = time.time() - state["started_at"]
@@ -897,7 +904,7 @@ def _resume_nuke_countdowns(loop: asyncio.AbstractEventLoop):
     with db_conn() as conn:
         rows = conn.execute(
             "SELECT device_id, started_at, countdown_secs FROM nuke_state "
-            "WHERE active=1 AND aborted=0 AND executed=0"
+            "WHERE active=1 AND aborted=0 AND executed=0 AND execution_claimed=0"
         ).fetchall()
     for row in rows:
         elapsed   = time.time() - row["started_at"]
@@ -1144,7 +1151,7 @@ async def nuke_abort(req: NukeAbortRequest, request: Request):
         raise HTTPException(status_code=404, detail="No nuke state for this device")
     if state.get("aborted"):
         return {"status": "already_aborted"}
-    if state.get("executed") or not state.get("active"):
+    if state.get("executed") or state.get("execution_claimed") or not state.get("active"):
         raise HTTPException(status_code=409, detail="Wipe execution has already been claimed or is no longer abortable")
     if not db_abort_nuke_state(req.device_id):
         # Re-read after the conditional update loses a race with execution.
@@ -1173,6 +1180,7 @@ async def nuke_status(device_id: str):
         "active":            state["active"],
         "aborted":           state["aborted"],
         "executed":          state.get("executed", False),
+        "execution_claimed": state.get("execution_claimed", False),
         "remaining_seconds": int(remaining),
         "countdown_seconds": state["countdown_seconds"],
     }
