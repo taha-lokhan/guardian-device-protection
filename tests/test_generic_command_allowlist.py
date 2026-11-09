@@ -73,7 +73,7 @@ def test_generic_endpoint_dispatches_allowlisted_commands(harness, command):
     assert response.json()["status"] == "queued"
     assert len(published) == 1
     assert published[0][0][0:2] == ("test-device", command)
-    assert any(event[0][0] == "command.sent" for event in audit_events)
+    assert any(event[0][0] == "command.queued" for event in audit_events)
 
 
 def test_invalid_device_id_is_rejected_before_dispatch(harness):
