@@ -121,13 +121,9 @@ def lock_mac() -> bool:
     return False
 
 
-def wipe_mac():
+def wipe_mac(command_id: str = None):
     log.warning("WIPE -- Option A: eraseinstall")
-    client.publish(
-        f"guardian/{DEVICE_ID}/ack",
-        json.dumps({"command": "wipe_complete", "status": "initiating", "ts": time.time()}),
-        qos=1,
-    )
+    send_ack("wipe", "initiating", command_id)
     time.sleep(2)
 
     installers = [
@@ -211,25 +207,17 @@ def handle_command(payload: dict):
         # Signal any running wipe countdown to cancel before execution.
         _wipe_abort_flag.set()
         log.warning("abort_wipe received — wipe abort flag set")
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "abort_wipe", "status": "flag_set", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("abort_wipe", "flag_set", command_id)
     elif command == "wipe":
         def do_wipe():
             _wipe_abort_flag.clear()  # reset flag for this wipe attempt
             if show_abort_window(ABORT_WINDOW) or _wipe_abort_flag.is_set():
                 log.warning("Wipe aborted (local dialog or remote abort_wipe)")
                 _wipe_abort_flag.clear()
-                client.publish(
-                    f"guardian/{DEVICE_ID}/ack",
-                    json.dumps({"command": "wipe_complete", "status": "aborted_locally", "ts": time.time()}),
-                    qos=1,
-                )
+                send_ack("wipe", "aborted_locally", command_id)
                 return
             location_burst(count=5, interval=1.5)
-            wipe_mac()
+            wipe_mac(command_id)
         threading.Thread(target=do_wipe, daemon=True).start()
     else:
         log.warning(f"Unknown command: {command!r}")
