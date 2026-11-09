@@ -26,6 +26,7 @@ def harness(monkeypatch, tmp_path):
         lambda *args, **kwargs: published.append((args, kwargs)),
     )
     monkeypatch.setattr(relay, "db_log_command", lambda *args, **kwargs: None)
+    monkeypatch.setattr(relay, "db_enqueue_outbox_command", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         relay, "audit",
         lambda *args, **kwargs: audit_events.append((args, kwargs)),
@@ -69,7 +70,7 @@ def test_generic_endpoint_dispatches_allowlisted_commands(harness, command):
     )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "sent"
+    assert response.json()["status"] == "queued"
     assert len(published) == 1
     assert published[0][0][0:2] == ("test-device", command)
     assert any(event[0][0] == "command.sent" for event in audit_events)
