@@ -82,6 +82,12 @@ def location_burst(count: int = 5, interval: float = 2.0):
         send_location()
         time.sleep(interval)
 
+def send_ack(command: str, status: str, command_id: str = None):
+    payload = {"command": command, "status": status, "ts": time.time()}
+    if command_id:
+        payload["id"] = command_id
+    client.publish(f"guardian/{DEVICE_ID}/ack", json.dumps(payload), qos=1)
+
 
 def lock_mac() -> bool:
     """
@@ -176,6 +182,7 @@ def show_abort_window(seconds: int) -> bool:
 
 def handle_command(payload: dict):
     command   = payload.get("command")
+    command_id = payload.get("id")
     issued_at = payload.get("issued_at", 0)
     ttl       = payload.get("ttl", 300)
     age = time.time() - issued_at
@@ -185,24 +192,21 @@ def handle_command(payload: dict):
     log.info(f"Command: {command} (age={age:.1f}s)")
 
     if command == "ping":
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "ping", "status": "pong", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("ping", "pong", command_id)
     elif command == "status":
         send_status()
+        send_ack("status", "ok", command_id)
     elif command == "location":
         send_location()
+        send_ack("location", "ok", command_id)
     elif command == "location_burst":
-        threading.Thread(target=location_burst, daemon=True).start()
+        def _location_burst():
+            location_burst()
+            send_ack("location_burst", "ok", command_id)
+        threading.Thread(target=_location_burst, daemon=True).start()
     elif command == "lock":
         ok = lock_mac()
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "lock", "status": "ok" if ok else "failed", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("lock", "ok" if ok else "failed", command_id)
     elif command == "abort_wipe":
         # Signal any running wipe countdown to cancel before execution.
         _wipe_abort_flag.set()
