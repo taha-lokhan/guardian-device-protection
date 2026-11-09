@@ -437,11 +437,7 @@ def handle_command(payload: dict):
     elif command == "abort_wipe":
         _wipe_abort_flag.set()
         log.warning("abort_wipe received — wipe abort flag set")
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "abort_wipe", "status": "flag_set", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("abort_wipe", "flag_set", command_id)
 
     elif command == "wipe":
         def do_wipe():
