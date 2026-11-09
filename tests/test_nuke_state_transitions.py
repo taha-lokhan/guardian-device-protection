@@ -103,5 +103,6 @@ def test_wipe_is_dispatched_only_after_atomic_execution_claim(isolated_db, monke
 
     assert published == ["location_burst", "wipe"]
     state = relay.db_get_nuke_state("test-device")
-    assert state["executed"] is True
+    assert state["execution_claimed"] is True
+    assert state["executed"] is False  # completion is recorded only by device ACK
     assert state["active"] is False
