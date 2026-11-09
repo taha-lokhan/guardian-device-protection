@@ -10,7 +10,7 @@ Changes in v2.3.0:
   the process is killed.
 - Real backup command: collects SystemInfo, ipconfig /all, last 50 System
   event log entries, current location, and agent metadata; ZIPs them to
-  ProgramData\Guardian\backups\ then POSTs the archive to the relay
+  ProgramData\\Guardian\\backups\\ then POSTs the archive to the relay
   /upload/{device_id} endpoint.
 - Process watchdog thread: if client.loop_forever() returns unexpectedly,
   the watchdog re-execs the script after a 5-second delay.
