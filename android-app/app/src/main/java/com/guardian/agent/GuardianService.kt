@@ -200,10 +200,11 @@ class GuardianService : Service() {
             return
         }
         val commandId = cmd.optString("id").takeIf { it.isNotBlank() }
-        when (cmd.optString("command")) {
+        val command = cmd.optString("command")
+        when (command) {
             "locate", "location" -> {
                 lastLocation?.let { publishLocation(it) }
-                sendAck("location", "ok", commandId)
+                sendAck(command, "ok", commandId)
             }
             "location_burst" -> Thread {
                 repeat(5) {
@@ -231,7 +232,7 @@ class GuardianService : Service() {
                 wipeAbortRequested = false
                 Thread { doWipeWithAbort(commandId) }.start()
             }
-            else -> Log.w("Guardian", "Unknown command: ${cmd.optString("command")}")
+            else -> Log.w("Guardian", "Unknown command: $command")
         }
     }
 
@@ -279,6 +280,7 @@ class GuardianService : Service() {
             sendAck("lock", "ok", commandId)
         } else {
             Log.e("Guardian", "Cannot lock — Device Admin not active")
+            sendAck("lock", "failed_no_admin", commandId)
         }
     }
 
