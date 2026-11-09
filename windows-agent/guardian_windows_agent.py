@@ -350,11 +350,16 @@ def _write_reset_config():
     config_path.write_text(xml, encoding="utf-8")
     log.info(f"ResetConfig.xml written to {config_path}")
 
-def wipe_windows():
+def wipe_windows(command_id: str = None):
     log.warning("Wipe initiating")
     client.publish(
         f"guardian/{DEVICE_ID}/ack",
-        json.dumps({"command": "wipe_complete", "status": "initiating", "ts": time.time()}),
+        json.dumps({
+            "command": "wipe",
+            "status": "initiating",
+            "id": command_id,
+            "ts": time.time(),
+        }),
         qos=1,
     )
     time.sleep(2)
@@ -382,6 +387,7 @@ def wipe_windows():
 # ---------------------------------------------------------------------------
 def handle_command(payload: dict):
     command   = payload.get("command")
+    command_id = payload.get("id")
     issued_at = payload.get("issued_at", 0)
     ttl       = payload.get("ttl", 300)
     age = time.time() - issued_at
@@ -454,13 +460,13 @@ def handle_command(payload: dict):
                 _wipe_abort_flag.clear()
                 client.publish(
                     f"guardian/{DEVICE_ID}/ack",
-                    json.dumps({"command": "wipe_complete", "status": "aborted_locally", "ts": time.time()}),
+                    json.dumps({"command": "wipe", "status": "aborted_locally", "id": command_id, "ts": time.time()}),
                     qos=1,
                 )
                 return
             threading.Thread(target=location_burst, args=(5, 1.5), daemon=True).start()
             time.sleep(5)
-            wipe_windows()
+            wipe_windows(command_id)
         threading.Thread(target=do_wipe, daemon=True).start()
 
     else:
