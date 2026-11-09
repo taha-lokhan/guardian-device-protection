@@ -206,6 +206,27 @@ def init_db():
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_cmdlog_device ON command_log(device_id)")
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS command_outbox (
+                command_id       TEXT PRIMARY KEY,
+                device_id        TEXT NOT NULL,
+                command          TEXT NOT NULL,
+                topic            TEXT NOT NULL,
+                payload          TEXT NOT NULL,
+                destructive      INTEGER NOT NULL DEFAULT 0,
+                status            TEXT NOT NULL,
+                attempts          INTEGER NOT NULL DEFAULT 0,
+                created_at        REAL NOT NULL,
+                updated_at        REAL NOT NULL,
+                next_attempt_at   REAL NOT NULL,
+                last_attempt_at   REAL,
+                broker_acked_at   REAL,
+                device_acked_at   REAL,
+                last_error        TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_dispatch ON command_outbox(status, next_attempt_at, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_outbox_device ON command_outbox(device_id, created_at)")
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS watchdog_alerts (
                 device_id   TEXT PRIMARY KEY,
                 alerted_at  REAL NOT NULL
@@ -354,6 +375,154 @@ def db_ack_command(device_id: str, command: str, status: str):
             "ORDER BY issued_at DESC LIMIT 1",
             (status, time.time(), device_id, command),
         )
+
+
+def db_enqueue_outbox_command(device_id: str, command: str, params: dict,
+                              command_id: str, issued_at: float, ttl: int,
+                              destructive: bool = False):
+    payload = _build_command_payload(command_id, command, issued_at, ttl, params)
+    now = time.time()
+    with db_conn() as conn:
+        conn.execute(
+            "INSERT INTO command_outbox "
+            "(command_id, device_id, command, topic, payload, destructive, status, "
+            "attempts, created_at, updated_at, next_attempt_at) "
+            "VALUES(?,?,?,?,?,?, 'pending', 0, ?, ?, ?)",
+            (command_id, device_id, command, f"guardian/{device_id}/command",
+             json.dumps(payload, separators=(',', ':'), sort_keys=True),
+             1 if destructive else 0, now, now, now),
+        )
+
+
+def db_claim_nuke_execution_and_enqueue(device_id: str, command_id: str,
+                                        issued_at: float, ttl: int) -> bool:
+    """Atomically claim the destructive transition and persist its exact MQTT envelope."""
+    payload = _build_command_payload(command_id, "wipe", issued_at, ttl, {})
+    now = time.time()
+    with db_conn() as conn:
+        cursor = conn.execute(
+            "UPDATE nuke_state SET execution_claimed=1, active=0 "
+            "WHERE device_id=? AND active=1 AND aborted=0 AND executed=0 AND execution_claimed=0",
+            (device_id,),
+        )
+        if cursor.rowcount != 1:
+            return False
+        conn.execute(
+            "INSERT INTO command_outbox "
+            "(command_id, device_id, command, topic, payload, destructive, status, "
+            "attempts, created_at, updated_at, next_attempt_at) "
+            "VALUES(?,?,?,?,?,1,'pending',0,?,?,?)",
+            (command_id, device_id, "wipe", f"guardian/{device_id}/command",
+             json.dumps(payload, separators=(',', ':'), sort_keys=True), now, now, now),
+        )
+    return True
+
+
+def db_get_next_outbox_command() -> Optional[dict]:
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM command_outbox WHERE status='pending' AND next_attempt_at<=? "
+            "ORDER BY created_at LIMIT 1",
+            (time.time(),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def db_claim_outbox_command(command_id: str) -> Optional[dict]:
+    now = time.time()
+    with db_conn() as conn:
+        cursor = conn.execute(
+            "UPDATE command_outbox SET status='publishing', attempts=attempts+1, "
+            "last_attempt_at=?, updated_at=? "
+            "WHERE command_id=? AND status='pending' AND next_attempt_at<=?",
+            (now, now, command_id, now),
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = conn.execute(
+            "SELECT * FROM command_outbox WHERE command_id=?", (command_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def db_mark_outbox_broker_acked(command_id: str):
+    now = time.time()
+    with db_conn() as conn:
+        conn.execute(
+            "UPDATE command_outbox SET status='broker_acked', broker_acked_at=?, "
+            "updated_at=?, last_error=NULL WHERE command_id=? AND status='publishing'",
+            (now, now, command_id),
+        )
+
+
+def db_mark_outbox_device_acked(device_id: str, command_id: str,
+                                command: str, device_status: str) -> bool:
+    now = time.time()
+    with db_conn() as conn:
+        cursor = conn.execute(
+            "UPDATE command_outbox SET status='device_acknowledged', device_acked_at=?, "
+            "updated_at=?, last_error=NULL "
+            "WHERE command_id=? AND device_id=? AND command=? "
+            "AND status IN ('pending','publishing','broker_acked','uncertain')",
+            (now, now, command_id, device_id, command),
+        )
+        if cursor.rowcount == 1:
+            conn.execute(
+                "UPDATE command_outbox SET last_error=? WHERE command_id=?",
+                (f"device_status={device_status[:120]}", command_id),
+            )
+        return cursor.rowcount == 1
+
+
+def db_mark_outbox_failure(command_id: str, error: str, *, uncertain: bool):
+    now = time.time()
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT attempts, destructive FROM command_outbox WHERE command_id=?",
+            (command_id,),
+        ).fetchone()
+        if not row:
+            return
+        if uncertain and row["destructive"]:
+            status = "uncertain"
+            next_attempt = now
+        else:
+            status = "pending"
+            next_attempt = now + min(2 ** min(row["attempts"], 6), 60)
+        conn.execute(
+            "UPDATE command_outbox SET status=?, next_attempt_at=?, updated_at=?, last_error=? "
+            "WHERE command_id=? AND status='publishing'",
+            (status, next_attempt, now, error[:500], command_id),
+        )
+
+
+def db_recover_outbox_after_restart():
+    """Never replay a destructive publish whose outcome became ambiguous at crash time."""
+    now = time.time()
+    with db_conn() as conn:
+        conn.execute(
+            "UPDATE command_outbox SET status='uncertain', updated_at=?, "
+            "last_error='Relay restarted during publish; manual reconciliation required' "
+            "WHERE status='publishing' AND destructive=1",
+            (now,),
+        )
+        conn.execute(
+            "UPDATE command_outbox SET status='pending', next_attempt_at=?, updated_at=?, "
+            "last_error='Relay restarted during publish; safe retry scheduled' "
+            "WHERE status='publishing' AND destructive=0",
+            (now, now),
+        )
+
+
+def db_get_outbox_status(command_id: str) -> Optional[dict]:
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT command_id, device_id, command, status, destructive, attempts, "
+            "created_at, updated_at, broker_acked_at, device_acked_at, last_error "
+            "FROM command_outbox WHERE command_id=?",
+            (command_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 def db_get_command_log(device_id: str) -> list:
     with db_conn() as conn:
@@ -625,6 +794,67 @@ def sign_command(command_id: str, command: str, issued_at: float) -> str:
         hashlib.sha256,
     ).hexdigest()
 
+
+def _build_command_payload(command_id: str, command: str, issued_at: float,
+                           ttl: int, params: dict) -> dict:
+    return {
+        "command": command,
+        "params": params,
+        "issued_at": issued_at,
+        "ttl": ttl,
+        "id": command_id,
+        "sig": sign_command(command_id, command, issued_at),
+    }
+
+
+def _publish_outbox_command(command_id: str) -> bool:
+    """Publish one persisted envelope and wait for MQTT QoS 1 broker acknowledgement."""
+    row = db_claim_outbox_command(command_id)
+    if not row:
+        return False
+    try:
+        info = mqtt_client.publish(row["topic"], row["payload"], qos=1)
+        rc = getattr(info, "rc", mqtt.MQTT_ERR_SUCCESS)
+        if rc != mqtt.MQTT_ERR_SUCCESS:
+            # NO_CONN means Paho rejected the publish before queueing it.
+            no_conn = getattr(mqtt, "MQTT_ERR_NO_CONN", -1)
+            raise _OutboxPublishError(
+                f"MQTT publish rejected with rc={rc}",
+                uncertain=(rc != no_conn),
+            )
+        info.wait_for_publish(timeout=10)
+        if not info.is_published():
+            raise _OutboxPublishError("Timed out waiting for MQTT PUBACK", uncertain=True)
+        db_mark_outbox_broker_acked(command_id)
+        return True
+    except _OutboxPublishError as exc:
+        db_mark_outbox_failure(command_id, str(exc), uncertain=exc.uncertain)
+        return False
+    except Exception as exc:
+        # Once publish() accepted a message, an exception/timeout has an ambiguous
+        # outcome. Destructive commands must not be replayed automatically.
+        db_mark_outbox_failure(command_id, f"{type(exc).__name__}: {exc}", uncertain=True)
+        return False
+
+
+class _OutboxPublishError(Exception):
+    def __init__(self, message: str, *, uncertain: bool):
+        super().__init__(message)
+        self.uncertain = uncertain
+
+
+async def outbox_dispatcher_task():
+    while True:
+        try:
+            row = db_get_next_outbox_command()
+            if row:
+                await asyncio.to_thread(_publish_outbox_command, row["command_id"])
+            else:
+                await asyncio.sleep(1)
+        except Exception as exc:
+            print(f"[OUTBOX] Dispatcher error: {type(exc).__name__}: {exc}")
+            await asyncio.sleep(2)
+
 def verify_command_signature(command_id: str, command: str,
                               issued_at: float, signature: str) -> bool:
     expected = sign_command(command_id, command, issued_at)
@@ -757,10 +987,15 @@ def on_message(client, userdata, msg):
         })
 
     elif msg_type == "ack":
-        cmd    = payload.get("command", "")
-        status = payload.get("status", "ack")
+        cmd = payload.get("command", "")
+        status = str(payload.get("status", "ack"))
+        command_id = payload.get("id") or payload.get("command_id")
         db_ack_command(device_id, cmd, status)
-        if cmd == "wipe_complete":
+        if isinstance(command_id, str) and command_id:
+            db_mark_outbox_device_acked(device_id, command_id, cmd, status)
+        # Only an explicit device completion acknowledgement may mark a wipe
+        # executed. An "initiating" or receipt ACK is not proof of completion.
+        if cmd == "wipe_complete" and status == "completed" and isinstance(command_id, str):
             state = db_get_nuke_state(device_id)
             if state and not state.get("aborted"):
                 state["executed"] = True
@@ -780,15 +1015,7 @@ def mqtt_connect():
 
 def _publish_command(device_id: str, command: str, params: dict,
                      command_id: str, issued_at: float, ttl: int):
-    signature = sign_command(command_id, command, issued_at)
-    payload   = {
-        "command":   command,
-        "params":    params,
-        "issued_at": issued_at,
-        "ttl":       ttl,
-        "id":        command_id,
-        "sig":       signature,
-    }
+    payload = _build_command_payload(command_id, command, issued_at, ttl, params)
     mqtt_client.publish(f"guardian/{device_id}/command", json.dumps(payload), qos=1)
 
 # ---------------------------------------------------------------------------
@@ -877,22 +1104,22 @@ async def nuke_countdown_task(device_id: str):
             print(f"[NUKE] Countdown elapsed; starting final abortable window for {device_id}")
             burst_id = str(uuid.uuid4())
             burst_ts = time.time()
-            _publish_command(device_id, "location_burst", {}, burst_id, burst_ts, 60)
+            db_enqueue_outbox_command(device_id, "location_burst", {}, burst_id, burst_ts, 60)
             await asyncio.sleep(3)
 
-            # The abort endpoint and this claim compete through conditional SQL
-            # updates. Exactly one can transition the active state.
-            if not db_claim_nuke_execution(device_id):
+            # The abort endpoint and this transaction compete atomically. The
+            # execution claim and exact signed wipe envelope are committed together.
+            wipe_id = str(uuid.uuid4())
+            wipe_ts = time.time()
+            if not db_claim_nuke_execution_and_enqueue(device_id, wipe_id, wipe_ts, COMMAND_TTL):
                 print(f"[NUKE] Wipe cancelled or already claimed for {device_id}")
                 return
 
-            wipe_id = str(uuid.uuid4())
-            wipe_ts = time.time()
-            _publish_command(device_id, "wipe", {}, wipe_id, wipe_ts, COMMAND_TTL)
-            audit("nuke.command_dispatched", device_id=device_id)
+            audit("nuke.command_queued", device_id=device_id,
+                  detail=f"command_id={wipe_id}; delivery=pending")
             await ntfy_alert(
-                title=f"WIPE COMMAND DISPATCHED — {device_id}",
-                message=f"Guardian dispatched the wipe command for {device_id} at {datetime.now(timezone.utc).isoformat()}. Device-side completion must be confirmed separately.",
+                title=f"WIPE COMMAND QUEUED — {device_id}",
+                message=f"Guardian durably queued the wipe command for {device_id} at {datetime.now(timezone.utc).isoformat()}. Broker delivery and device acknowledgement are tracked separately.",
                 priority="urgent", tags="fire,skull",
             )
             return
@@ -921,9 +1148,11 @@ async def lifespan(app: FastAPI):
         print("[WARN] DASHBOARD_ORIGIN is not set — CORS will block all browser requests.")
     init_db()
     db_purge_stale_nuke_states()
+    db_recover_outbox_after_restart()
     mqtt_connect()
     loop = asyncio.get_running_loop()
     _resume_nuke_countdowns(loop)
+    loop.create_task(outbox_dispatcher_task())
     loop.create_task(watchdog_task())
     yield
     mqtt_client.loop_stop()
@@ -1030,6 +1259,16 @@ async def get_location(device_id: str):
 async def get_device_log(device_id: str):
     _validate_device_id(device_id)
     return {"log": db_get_command_log(device_id)}
+
+
+@app.get("/commands/{command_id}", dependencies=[Depends(require_auth)])
+async def get_command_delivery_status(command_id: str):
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", command_id):
+        raise HTTPException(status_code=400, detail="Invalid command ID")
+    status = db_get_outbox_status(command_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Command not found")
+    return status
 
 # Commands permitted through the ordinary operator API. Destructive actions
 # must use their dedicated, server-side authorization workflow and must never
