@@ -996,15 +996,41 @@ async def get_device_log(device_id: str):
     _validate_device_id(device_id)
     return {"log": db_get_command_log(device_id)}
 
+# Commands permitted through the ordinary operator API. Destructive actions
+# must use their dedicated, server-side authorization workflow and must never
+# be dispatchable by choosing a command string in a generic request.
+GENERIC_COMMAND_ALLOWLIST = frozenset({
+    "ping",
+    "status",
+    "location",
+    "location_burst",
+    "lock",
+    "backup",
+})
+
+
 @app.post("/command", dependencies=[Depends(require_auth)])
 async def send_command(req: CommandRequest, request: Request):
     _validate_device_id(req.device_id)
+    ip = _get_client_ip(request)
+
+    if req.command not in GENERIC_COMMAND_ALLOWLIST:
+        audit(
+            "command.rejected",
+            actor_ip=ip,
+            device_id=req.device_id,
+            detail=f"cmd={req.command!r} reason=not_allowed_on_generic_endpoint",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Command is not permitted through this endpoint. Use its dedicated authorization workflow.",
+        )
+
     command_id = str(uuid.uuid4())
     issued_at  = time.time()
     _publish_command(req.device_id, req.command, req.params or {},
                      command_id, issued_at, COMMAND_TTL)
     db_log_command(command_id, req.device_id, req.command, req.params or {}, issued_at)
-    ip = _get_client_ip(request)
     audit("command.sent", actor_ip=ip, device_id=req.device_id,
           detail=f"cmd={req.command} id={command_id}")
     return {"status": "sent", "command_id": command_id}
