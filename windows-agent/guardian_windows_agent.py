@@ -440,8 +440,8 @@ def handle_command(payload: dict):
         send_ack("abort_wipe", "flag_set", command_id)
 
     elif command == "wipe":
+        _wipe_abort_flag.clear()
         def do_wipe():
-            _wipe_abort_flag.clear()
             if abort_dialog(ABORT_WINDOW) or _wipe_abort_flag.is_set():
                 log.warning("Wipe aborted (local dialog or remote abort_wipe)")
                 _wipe_abort_flag.clear()
