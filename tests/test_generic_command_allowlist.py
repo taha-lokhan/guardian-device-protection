@@ -14,11 +14,13 @@ import relay_server as relay  # noqa: E402
 
 
 @pytest.fixture
-def harness(monkeypatch):
+def harness(monkeypatch, tmp_path):
     published = []
     audit_events = []
 
     relay.app.dependency_overrides[relay.require_auth] = lambda: True
+    monkeypatch.setattr(relay, "DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setattr(relay, "mqtt_connect", lambda: None)
     monkeypatch.setattr(
         relay, "_publish_command",
         lambda *args, **kwargs: published.append((args, kwargs)),
