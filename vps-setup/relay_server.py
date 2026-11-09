@@ -359,7 +359,7 @@ def db_log_command(command_id: str, device_id: str, command: str,
             "INSERT OR IGNORE INTO command_log"
             "(command_id, device_id, command, params, status, issued_at)"
             " VALUES(?,?,?,?,?,?)",
-            (command_id, device_id, command, json.dumps(params), "sent", issued_at),
+            (command_id, device_id, command, json.dumps(params), "queued", issued_at),
         )
         conn.execute(
             "DELETE FROM command_log WHERE device_id=? AND id NOT IN "
