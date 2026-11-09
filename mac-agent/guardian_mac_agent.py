@@ -209,8 +209,8 @@ def handle_command(payload: dict):
         log.warning("abort_wipe received — wipe abort flag set")
         send_ack("abort_wipe", "flag_set", command_id)
     elif command == "wipe":
+        _wipe_abort_flag.clear()  # initialize before the worker can receive an abort
         def do_wipe():
-            _wipe_abort_flag.clear()  # reset flag for this wipe attempt
             if show_abort_window(ABORT_WINDOW) or _wipe_abort_flag.is_set():
                 log.warning("Wipe aborted (local dialog or remote abort_wipe)")
                 _wipe_abort_flag.clear()
