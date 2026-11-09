@@ -187,6 +187,13 @@ def location_burst(count: int = 5, interval: float = 2.0):
         send_location()
         time.sleep(interval)
 
+def send_ack(command: str, status: str, command_id: str = None, **extra):
+    payload = {"command": command, "status": status, "ts": time.time()}
+    if command_id:
+        payload["id"] = command_id
+    payload.update(extra)
+    client.publish(f"guardian/{DEVICE_ID}/ack", json.dumps(payload), qos=1)
+
 # ---------------------------------------------------------------------------
 # STATUS
 # ---------------------------------------------------------------------------
@@ -397,50 +404,34 @@ def handle_command(payload: dict):
     log.info(f"Command: {command} (age={age:.1f}s)")
 
     if command == "ping":
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "ping", "status": "pong", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("ping", "pong", command_id)
 
     elif command == "status":
         send_status()
+        send_ack("status", "ok", command_id)
 
     elif command == "location":
         send_location()
+        send_ack("location", "ok", command_id)
 
     elif command == "location_burst":
-        threading.Thread(target=location_burst, daemon=True).start()
+        def _location_burst():
+            location_burst()
+            send_ack("location_burst", "ok", command_id)
+        threading.Thread(target=_location_burst, daemon=True).start()
 
     elif command == "lock":
         ctypes.windll.user32.LockWorkStation()
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "lock", "status": "ok", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("lock", "ok", command_id)
 
     elif command == "backup":
         def _do_backup():
             try:
                 zip_path = do_backup()
-                client.publish(
-                    f"guardian/{DEVICE_ID}/ack",
-                    json.dumps({
-                        "command": "backup",
-                        "status":  "ok",
-                        "path":    zip_path,
-                        "ts":      time.time(),
-                    }),
-                    qos=1,
-                )
+                send_ack("backup", "ok", command_id, path=zip_path)
             except Exception as e:
                 log.error(f"Backup failed: {e}")
-                client.publish(
-                    f"guardian/{DEVICE_ID}/ack",
-                    json.dumps({"command": "backup", "status": f"error: {e}", "ts": time.time()}),
-                    qos=1,
-                )
+                send_ack("backup", f"error: {e}", command_id)
         threading.Thread(target=_do_backup, daemon=True).start()
 
     elif command == "abort_wipe":
