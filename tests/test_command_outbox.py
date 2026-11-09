@@ -102,3 +102,42 @@ def test_device_ack_is_bound_to_exact_device_and_command_id(outbox_db):
         "device-1", command_id, "wipe", "accepted"
     ) is True
     assert relay.db_get_outbox_status(command_id)["status"] == "device_acknowledged"
+
+
+def test_device_ack_progresses_from_receipt_to_explicit_completion(outbox_db):
+    command_id = enqueue(command="wipe", destructive=True)
+    assert relay.db_mark_outbox_device_acked(
+        "device-1", command_id, "wipe", "initiating"
+    ) is True
+    first = relay.db_get_outbox_status(command_id)
+    assert first["status"] == "device_acknowledged"
+    first_ack_at = first["device_acked_at"]
+
+    assert relay.db_mark_outbox_device_acked(
+        "device-1", command_id, "wipe", "completed"
+    ) is True
+    final = relay.db_get_outbox_status(command_id)
+    assert final["status"] == "device_completed"
+    assert final["device_acked_at"] == first_ack_at
+
+
+def test_completion_ack_does_not_match_another_command(outbox_db):
+    command_id = enqueue(command="wipe", destructive=True)
+    assert relay.db_mark_outbox_device_acked(
+        "device-1", command_id, "lock", "completed"
+    ) is False
+    assert relay.db_get_outbox_status(command_id)["status"] == "pending"
+
+
+def test_duplicate_completion_ack_is_idempotent(outbox_db):
+    command_id = enqueue(command="wipe", destructive=True)
+    assert relay.db_mark_outbox_device_acked(
+        "device-1", command_id, "wipe", "initiating"
+    ) is True
+    assert relay.db_mark_outbox_device_acked(
+        "device-1", command_id, "wipe", "completed"
+    ) is True
+    assert relay.db_mark_outbox_device_acked(
+        "device-1", command_id, "wipe", "completed"
+    ) is False
+    assert relay.db_get_outbox_status(command_id)["status"] == "device_completed"
