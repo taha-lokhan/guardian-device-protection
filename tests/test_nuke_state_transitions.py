@@ -79,10 +79,12 @@ def test_abort_during_final_grace_window_prevents_wipe(isolated_db, monkeypatch)
 
     asyncio.run(relay.nuke_countdown_task("test-device"))
 
-    assert [row[0] for row in outbox_commands()] == ["location_burst"]
+    # Aborting during the grace window must leave no queued telemetry or wipe.
+    assert outbox_commands() == []
     state = relay.db_get_nuke_state("test-device")
     assert state["aborted"] is True
     assert state["executed"] is False
+    assert state["execution_claimed"] is False
 
 
 def test_wipe_is_dispatched_only_after_atomic_execution_claim(isolated_db, monkeypatch):
@@ -98,8 +100,17 @@ def test_wipe_is_dispatched_only_after_atomic_execution_claim(isolated_db, monke
 
     asyncio.run(relay.nuke_countdown_task("test-device"))
 
-    assert [row[0] for row in outbox_commands()] == ["location_burst", "wipe"]
-    assert all(row[1] == "pending" for row in outbox_commands())
+    rows = outbox_commands()
+    assert [row[0] for row in rows] == ["location_burst", "wipe"]
+    assert all(row[1] == "pending" for row in rows)
+
+    with sqlite3.connect(relay.DB_PATH) as conn:
+        due_times = dict(conn.execute(
+            "SELECT command, next_attempt_at FROM command_outbox WHERE device_id=?",
+            ("test-device",),
+        ).fetchall())
+    assert due_times["wipe"] >= due_times["location_burst"] + 2.9
+
     state = relay.db_get_nuke_state("test-device")
     assert state["execution_claimed"] is True
     assert state["executed"] is False  # completion is recorded only by device ACK
