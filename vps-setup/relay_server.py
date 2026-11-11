@@ -396,9 +396,21 @@ def db_enqueue_outbox_command(device_id: str, command: str, params: dict,
 
 def db_claim_nuke_execution_and_enqueue(device_id: str, command_id: str,
                                         issued_at: float, ttl: int) -> bool:
-    """Atomically claim the destructive transition and persist its exact MQTT envelope."""
-    payload = _build_command_payload(command_id, "wipe", issued_at, ttl, {})
+    """Atomically claim execution and queue the final location burst plus wipe.
+
+    The location burst is deliberately not queued during the abortable grace
+    window. If abort wins, no pre-wipe telemetry remains in the outbox.
+    """
     now = time.time()
+    burst_id = str(uuid.uuid4())
+    burst_payload = _build_command_payload(
+        burst_id, "location_burst", now, 60, {}
+    )
+    wipe_payload = _build_command_payload(command_id, "wipe", issued_at, ttl, {})
+    burst_created_at = now
+    wipe_created_at = now + 0.001
+    wipe_next_attempt_at = now + 3.0
+
     with db_conn() as conn:
         cursor = conn.execute(
             "UPDATE nuke_state SET execution_claimed=1, active=0 "
@@ -407,13 +419,27 @@ def db_claim_nuke_execution_and_enqueue(device_id: str, command_id: str,
         )
         if cursor.rowcount != 1:
             return False
+
+        # Queue telemetry only after the one-way execution claim has won.
+        conn.execute(
+            "INSERT INTO command_outbox "
+            "(command_id, device_id, command, topic, payload, destructive, status, "
+            "attempts, created_at, updated_at, next_attempt_at) "
+            "VALUES(?,?,?,?,?,0,'pending',0,?,?,?)",
+            (burst_id, device_id, "location_burst", f"guardian/{device_id}/command",
+             json.dumps(burst_payload, separators=(',', ':'), sort_keys=True),
+             burst_created_at, now, now),
+        )
+        # Keep the existing short lead time so the location burst is handed to
+        # the agent before the wipe command becomes eligible for dispatch.
         conn.execute(
             "INSERT INTO command_outbox "
             "(command_id, device_id, command, topic, payload, destructive, status, "
             "attempts, created_at, updated_at, next_attempt_at) "
             "VALUES(?,?,?,?,?,1,'pending',0,?,?,?)",
             (command_id, device_id, "wipe", f"guardian/{device_id}/command",
-             json.dumps(payload, separators=(',', ':'), sort_keys=True), now, now, now),
+             json.dumps(wipe_payload, separators=(',', ':'), sort_keys=True),
+             wipe_created_at, now, wipe_next_attempt_at),
         )
     return True
 
@@ -1110,13 +1136,12 @@ async def nuke_countdown_task(device_id: str):
         if elapsed >= state["countdown_seconds"]:
             # This is still an abortable phase. Do not mark the wipe executed yet.
             print(f"[NUKE] Countdown elapsed; starting final abortable window for {device_id}")
-            burst_id = str(uuid.uuid4())
-            burst_ts = time.time()
-            db_enqueue_outbox_command(device_id, "location_burst", {}, burst_id, burst_ts, 60)
+            # Keep this grace window side-effect free. The final location burst
+            # and wipe are queued together only if execution claim wins below.
             await asyncio.sleep(3)
 
             # The abort endpoint and this transaction compete atomically. The
-            # execution claim and exact signed wipe envelope are committed together.
+            # execution claim and both command envelopes are committed together.
             wipe_id = str(uuid.uuid4())
             wipe_ts = time.time()
             if not db_claim_nuke_execution_and_enqueue(device_id, wipe_id, wipe_ts, COMMAND_TTL):
