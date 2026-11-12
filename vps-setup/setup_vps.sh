@@ -3,7 +3,32 @@
 # Run as root on a fresh Ubuntu 22.04 / 24.04 VPS
 # Usage: sudo bash setup_vps.sh
 
-set -e
+set -Eeuo pipefail
+umask 077
+
+if [[ ${EUID} -ne 0 ]]; then
+  echo "Run this installer as root (sudo)." >&2
+  exit 1
+fi
+
+if [[ -z "${SSH_ALLOWED_CIDR:-}" ]]; then
+  echo "Set SSH_ALLOWED_CIDR to your trusted public IPv4 address/CIDR before running." >&2
+  echo "Example: SSH_ALLOWED_CIDR=203.0.113.10/32 sudo -E bash setup_vps.sh" >&2
+  exit 1
+fi
+python3 - "${SSH_ALLOWED_CIDR}" <<'PY'
+import ipaddress, sys
+try:
+    ipaddress.ip_network(sys.argv[1], strict=False)
+except ValueError:
+    raise SystemExit("SSH_ALLOWED_CIDR must be a valid IP address or CIDR")
+PY
+
+if [[ -e /etc/wireguard/wg0.conf ]]; then
+  echo "Existing /etc/wireguard/wg0.conf found; refusing to overwrite WireGuard keys/config." >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 echo "=== Guardian VPS Setup v2 ==="
 
@@ -20,8 +45,10 @@ chmod 600 $WG_DIR/server_private.key
 SERVER_PRIV=$(cat $WG_DIR/server_private.key)
 SERVER_PUB=$(cat $WG_DIR/server_public.key)
 
-wg genkey | tee $WG_DIR/phone_private.key | wg pubkey > $WG_DIR/phone_public.key
-wg genkey | tee $WG_DIR/laptop_private.key | wg pubkey > $WG_DIR/laptop_public.key
+wg genkey | tee "$WG_DIR/phone_private.key" | wg pubkey > "$WG_DIR/phone_public.key"
+wg genkey | tee "$WG_DIR/laptop_private.key" | wg pubkey > "$WG_DIR/laptop_public.key"
+chmod 600 "$WG_DIR/phone_private.key" "$WG_DIR/laptop_private.key"
+chmod 644 "$WG_DIR/phone_public.key" "$WG_DIR/laptop_public.key"
 
 PHONE_PRIV=$(cat $WG_DIR/phone_private.key)
 PHONE_PUB=$(cat $WG_DIR/phone_public.key)
@@ -35,8 +62,6 @@ cat > $WG_DIR/wg0.conf << EOF
 Address = 10.99.0.1/24
 ListenPort = 51820
 PrivateKey = $SERVER_PRIV
-PostUp = iptables -A FORWARD -i wg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i wg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
 
 # PHONE
 [Peer]
@@ -148,11 +173,11 @@ nginx -t && systemctl enable nginx && systemctl restart nginx
 echo "Configuring firewall..."
 ufw default deny incoming
 ufw default allow outgoing
-ufw allow ssh
+ufw allow from "$SSH_ALLOWED_CIDR" to any port 22 proto tcp
 ufw allow 51820/udp
-ufw allow 8443/tcp
-# Port 80 only accessible via WireGuard (nginx allow/deny handles this)
-ufw allow from 10.99.0.0/24 to any port 80
+# Relay API and dashboard are reachable only from authenticated WireGuard peers.
+ufw allow from 10.99.0.0/24 to any port 8443 proto tcp
+ufw allow from 10.99.0.0/24 to any port 80 proto tcp
 ufw --force enable
 
 cat > /root/guardian_credentials.txt << EOF
