@@ -151,6 +151,7 @@ def provision_fixture(root: Path, device: str, kid: str, seed: bytes):
     (directory / f"{kid}.private").write_text(private + "\n", encoding="ascii")
     (directory / f"{kid}.public").write_text(public + "\n", encoding="ascii")
     os.chmod(directory, 0o700)
+    os.chmod(directory / "active", 0o600)
     os.chmod(directory / f"{kid}.private", 0o600)
     return private, public
 
@@ -196,6 +197,7 @@ def test_relay_active_key_rotation_switches_trust_to_new_key(tmp_path, monkeypat
     (directory / "new-key.public").write_text(new_public + "\n", encoding="ascii")
     os.chmod(directory / "new-key.private", 0o600)
     (directory / "active").write_text("new-key\n", encoding="ascii")
+    os.chmod(directory / "active", 0o600)
     monkeypatch.setattr(relay, "COMMAND_KEY_DIR", str(tmp_path))
 
     payload = relay._build_command_payload(
@@ -218,6 +220,7 @@ def test_relay_rejects_symlinked_private_key(tmp_path, monkeypatch):
     real_key = directory / "real.private"
     real_key.write_text(private + "\n", encoding="ascii")
     os.chmod(real_key, 0o600)
+    (directory / "device-key-link.private").unlink()
     (directory / "device-key-link.private").symlink_to(real_key)
     monkeypatch.setattr(relay, "COMMAND_KEY_DIR", str(tmp_path))
     with pytest.raises(command_auth.CommandEnvelopeError):
