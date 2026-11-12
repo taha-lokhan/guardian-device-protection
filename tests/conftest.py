@@ -20,6 +20,7 @@ def isolated_device_command_keys(monkeypatch, tmp_path):
     for device_id, seed in (
         ("device-1", b"\x11" * 32),
         ("test-device", b"\x12" * 32),
+        ("device-a", b"\x13" * 32),
     ):
         directory = key_root / device_id
         directory.mkdir(mode=0o700)

@@ -110,8 +110,12 @@ def test_invalid_signature_expiry_future_clock_and_ttl_are_rejected():
     assert not verify(payload)
     assert not verify(make_envelope(issued_at=NOW - 301), now=NOW)
     assert not verify(make_envelope(issued_at=NOW + 61), now=NOW)
-    assert not verify(make_envelope(ttl=0))
-    assert not verify(make_envelope(ttl=3601))
+    zero_ttl = make_envelope()
+    zero_ttl["ttl"] = 0
+    assert not verify(zero_ttl)
+    excessive_ttl = make_envelope()
+    excessive_ttl["ttl"] = 3601
+    assert not verify(excessive_ttl)
 
 
 def test_replay_claim_is_durable_and_nonce_is_unique(tmp_path):

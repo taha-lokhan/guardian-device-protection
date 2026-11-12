@@ -401,14 +401,20 @@ def db_log_command(command_id: str, device_id: str, command: str,
             (device_id, device_id),
         )
 
-def db_ack_command(device_id: str, command: str, status: str):
+def db_ack_command(device_id: str, command: str, status: str, command_id: str) -> bool:
+    """Update only the exact command named by a syntactically valid ACK."""
+    try:
+        if not isinstance(command_id, str) or str(uuid.UUID(command_id)) != command_id:
+            return False
+    except (ValueError, AttributeError):
+        return False
     with db_conn() as conn:
-        conn.execute(
+        cursor = conn.execute(
             "UPDATE command_log SET status=?, ack_at=? "
-            "WHERE device_id=? AND command=? AND status='sent' "
-            "ORDER BY issued_at DESC LIMIT 1",
-            (status, time.time(), device_id, command),
+            "WHERE command_id=? AND device_id=? AND command=? AND status='sent'",
+            (status, time.time(), command_id, device_id, command),
         )
+        return cursor.rowcount == 1
 
 
 def db_enqueue_outbox_command(device_id: str, command: str, params: dict,
@@ -1094,18 +1100,26 @@ def on_message(client, userdata, msg):
         cmd = payload.get("command", "")
         status = str(payload.get("status", "ack"))
         command_id = payload.get("id") or payload.get("command_id")
-        db_ack_command(device_id, cmd, status)
-        if isinstance(command_id, str) and command_id:
-            db_mark_outbox_device_acked(device_id, command_id, cmd, status)
-        # Only an explicit device completion acknowledgement may mark a wipe
-        # executed. An "initiating" or receipt ACK is not proof of completion.
-        if cmd in ("wipe", "wipe_complete") and status == "completed" and isinstance(command_id, str):
+        if not isinstance(command_id, str):
+            return
+        try:
+            if str(uuid.UUID(command_id)) != command_id:
+                return
+        except (ValueError, AttributeError):
+            return
+        if not isinstance(cmd, str) or not cmd:
+            return
+        db_ack_command(device_id, cmd, status, command_id)
+        correlated = db_mark_outbox_device_acked(device_id, command_id, cmd, status)
+        # Completion is accepted only when this exact device/command pair
+        # advanced its own durable outbox record to device_completed.
+        if correlated and cmd == "wipe" and status == "completed":
             state = db_get_nuke_state(device_id)
-            if state and not state.get("aborted"):
+            if state and state.get("execution_claimed") and not state.get("aborted"):
                 state["executed"] = True
                 state["active"] = False
                 db_upsert_nuke_state(device_id, state)
-        print(f"[ACK] {device_id} -> {cmd}: {status}")
+        print(f"[ACK] {device_id} -> {cmd}: {status} correlated={correlated}")
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
