@@ -46,7 +46,7 @@ class SetupActivity : AppCompatActivity() {
 
             if (relayIp.isEmpty() || mqttPass.isEmpty() || deviceId.isEmpty() ||
                 !commandKeyId.matches(Regex("^[A-Za-z0-9_-]{1,64}$")) ||
-                !commandPublicKey.matches(Regex("^[A-Za-z0-9+/]{43}=$"))) {
+                !GuardianCommandAuth.isValidPublicKey(commandPublicKey)) {
                 Toast.makeText(
                     this,
                     "Relay, MQTT, device ID and the device-specific Ed25519 key ID/public key are required.",
