@@ -30,7 +30,7 @@ Private anti-theft system — remote wipe, lock, GPS tracking and backup for **A
 guardian-device-protection/
 ├── vps-setup/
 │   ├── relay_server.py       # FastAPI relay server
-│   ├── command_auth.py       # Protocol-v1 signing helper
+│   ├── command_auth.py       # Protocol-v2 Ed25519 signing helper
 │   ├── requirements.txt
 │   └── .env.template         # Copy to .env before deploy
 ├── mac-agent/
@@ -82,16 +82,15 @@ Place `guardian_windows_agent.py` and `command_auth.py` in the same directory an
 ```bash
 sudo /opt/guardian/venv/bin/python /opt/guardian/provision_device_key.py win-office
 ``
-Configure the endpoint with the printed values (the public key is not secret):
+Configure the endpoint with the printed values (the public key is not secret). Use the provided elevated `configure_agent.ps1` script so device ID and key trust settings are installed together, then restart the agent:
 ```powershell
-[Environment]::SetEnvironmentVariable("GUARDIAN_COMMAND_KEY_ID", "<key_id>", "Machine")
-[Environment]::SetEnvironmentVariable("GUARDIAN_COMMAND_PUBLIC_KEY", "<base64-public-key>", "Machine")
+`configure_agent.ps1` (run elevated) and enter the exact device ID, key ID and public key.
 ```
 Also configure the device ID to exactly match the provisioned ID. Open a new elevated terminal or restart the agent. It refuses to connect without a valid device-specific key ID and public key.
 
 ### 4. Android Agent
 
-Build the app from `android-app`. During setup, enter the device ID plus the matching device-specific `key_id` and base64 Ed25519 public key generated on the relay. The Android app stores only the public verification key; the relay private key must never be installed on an endpoint.
+Build the app from `android-app`. During setup, enter the device ID plus the matching device-specific `key_id` and base64 Ed25519 public key generated on the relay. The Android app stores only the public verification key in app-private preferences; the relay private key must never be installed on an endpoint. This is app-sandboxed storage, not hardware-backed key storage.
 
 ## Nuke System — How It Works
 
@@ -125,7 +124,7 @@ Build the app from `android-app`. During setup, enter the device ID plus the mat
 - TOTP is validated server-side with ±1 window drift
 - `NTFY_TOPIC` is secret — treat it like a password
 - Protocol-v2 command envelopes use Ed25519 signatures over a canonical envelope binding protocol version, key ID, command ID, target device, command, params, issue time, TTL and a unique nonce.
-- Protocol-v1 command params use canonical JSON with null, booleans, strings, safe integers, arrays and objects; floating-point values and non-ASCII object keys are rejected to keep Python/Kotlin byte serialization consistent.
+- Protocol-v2 command params use canonical JSON with null, booleans, strings, safe integers, arrays and objects; floating-point values and non-ASCII object keys are rejected to keep Python/Kotlin byte serialization consistent.
 - Windows, macOS and Android agents verify the Ed25519 signature against the device-specific pinned public key before dispatch and fail closed on unknown key IDs, altered fields, wrong targets, expired/future commands and replayed command IDs.
 - The relay holds a separate private key per device under a root-only key directory. Provision with `provision_device_key.py <device_id>`; rotate with `--rotate` and reconfigure that agent with the new public key; revoke with `revoke_device_key.py <device_id> <key_id>` and update the endpoint trust configuration. Rotation/revocation require coordinated agent reconfiguration; no automatic enrollment or remote rotation API is implemented. Protocol v2 intentionally has no fallback to the old shared-key protocol: upgrade the relay and all agents together, and provision each device before sending it commands.
 - Nuke sessions expire after 2 minutes if not completed
