@@ -13,7 +13,7 @@ fi
 
 if [[ -z "${SSH_ALLOWED_CIDR:-}" ]]; then
   echo "Set SSH_ALLOWED_CIDR to your trusted public IPv4 address/CIDR before running." >&2
-  echo "Example: SSH_ALLOWED_CIDR=203.0.113.10/32 sudo -E bash setup_vps.sh" >&2
+  echo "Example: sudo env SSH_ALLOWED_CIDR=203.0.113.10/32 bash setup_vps.sh" >&2
   exit 1
 fi
 python3 - "${SSH_ALLOWED_CIDR}" <<'PY'
