@@ -210,3 +210,23 @@ def test_relay_active_key_rotation_switches_trust_to_new_key(tmp_path, monkeypat
         payload, public_key=old_public, expected_device_id=DEVICE_ID,
         expected_key_id="old-key", now_seconds=NOW + 1,
     )
+
+
+def test_relay_rejects_symlinked_private_key(tmp_path, monkeypatch):
+    private, _ = provision_fixture(tmp_path, DEVICE_ID, "device-key-link", b"\x07" * 32)
+    directory = tmp_path / DEVICE_ID
+    real_key = directory / "real.private"
+    real_key.write_text(private + "\n", encoding="ascii")
+    os.chmod(real_key, 0o600)
+    (directory / "device-key-link.private").symlink_to(real_key)
+    monkeypatch.setattr(relay, "COMMAND_KEY_DIR", str(tmp_path))
+    with pytest.raises(command_auth.CommandEnvelopeError):
+        relay._build_command_payload(DEVICE_ID, COMMAND_ID, "ping", NOW, 300, {})
+
+
+def test_relay_rejects_insecure_active_pointer_permissions(tmp_path, monkeypatch):
+    provision_fixture(tmp_path, DEVICE_ID, "device-key-mode", b"\x08" * 32)
+    os.chmod(tmp_path / DEVICE_ID / "active", 0o644)
+    monkeypatch.setattr(relay, "COMMAND_KEY_DIR", str(tmp_path))
+    with pytest.raises(command_auth.CommandEnvelopeError):
+        relay._build_command_payload(DEVICE_ID, COMMAND_ID, "ping", NOW, 300, {})
