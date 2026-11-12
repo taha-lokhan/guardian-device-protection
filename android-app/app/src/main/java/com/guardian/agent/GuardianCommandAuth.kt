@@ -44,6 +44,16 @@ internal object GuardianCommandAuth {
     private val integerPattern = Regex("^-?(0|[1-9][0-9]*)$")
     private val objectKeyPattern = Regex("^[A-Za-z0-9_.-]{1,128}$")
 
+    internal fun isValidPublicKey(value: String): Boolean {
+        if (!base64KeyPattern.matches(value)) return false
+        return try {
+            val bytes = Base64.getDecoder().decode(value)
+            bytes.size == 32 && runCatching { Ed25519PublicKeyParameters(bytes, 0) }.isSuccess
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     @Synchronized
     fun verifyAndClaim(
         payload: JSONObject,
@@ -71,6 +81,9 @@ internal object GuardianCommandAuth {
             val actualFields = payload.keys().asSequence().toSet()
             if (actualFields != envelopeFields) return false
             if (!base64KeyPattern.matches(publicKey)) return false
+            if (!deviceIdPattern.matches(expectedDeviceId)) return false
+            val decodedPublicKey = Base64.getDecoder().decode(publicKey)
+            if (decodedPublicKey.size != 32) return false
             if (!Regex("^[A-Za-z0-9_-]{1,64}$").matches(expectedKeyId)) return false
             val version = strictInteger(payload.opt("version")) ?: return false
             if (version != PROTOCOL_VERSION) return false
@@ -88,7 +101,11 @@ internal object GuardianCommandAuth {
             val issuedAt = strictInteger(payload.opt("issued_at")) ?: return false
             val ttl = strictInteger(payload.opt("ttl")) ?: return false
             if (ttl !in 1L..MAX_TTL_SECONDS) return false
-            val age = nowSeconds - issuedAt
+            val age = try {
+                Math.subtractExact(nowSeconds, issuedAt)
+            } catch (_: ArithmeticException) {
+                return false
+            }
             if (issuedAt > nowSeconds + MAX_CLOCK_SKEW_SECONDS) return false
             if (age > ttl || age < -MAX_CLOCK_SKEW_SECONDS) return false
 
@@ -101,10 +118,8 @@ internal object GuardianCommandAuth {
             val message = ("guardian-command-envelope-v2\u0000" + canonicalJson(unsigned))
                 .toByteArray(StandardCharsets.UTF_8)
             if (message.size > MAX_CANONICAL_BYTES) return false
-            val publicBytes = Base64.getDecoder().decode(publicKey)
-            if (publicBytes.size != 32) return false
             val verifier = Ed25519Signer()
-            verifier.init(false, Ed25519PublicKeyParameters(publicBytes, 0))
+            verifier.init(false, Ed25519PublicKeyParameters(decodedPublicKey, 0))
             verifier.update(message, 0, message.size)
             verifier.verifySignature(signatureBytes)
         } catch (_: Exception) {
