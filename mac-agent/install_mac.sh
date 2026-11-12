@@ -1,5 +1,5 @@
 #!/bin/bash
-# Guardian Mac Agent v2.2.1 — Installer
+# Guardian Mac Agent v2.3.0 — Installer
 # Run as root: sudo bash install_mac.sh
 set -e
 
@@ -17,6 +17,11 @@ read -p "VPS IP/hostname: " BROKER
 read -p "MQTT username [guardian]: " MQTT_USER
 MQTT_USER=${MQTT_USER:-guardian}
 read -s -p "MQTT password: " MQTT_PASS; echo ""
+read -s -p "Command signing key (64 hex characters): " COMMAND_SIGNING_KEY; echo ""
+if [[ ! "$COMMAND_SIGNING_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    echo "[!] Command signing key must be exactly 64 hexadecimal characters."
+    exit 1
+fi
 read -p "Device ID (e.g. mac-home): " DEVICE_ID
 read -p "WireGuard IP for this device (e.g. 10.99.0.2) [leave blank to skip]: " WG_IP
 
@@ -25,7 +30,9 @@ pip3 install --quiet paho-mqtt
 
 mkdir -p "$AGENT_DIR"
 cp guardian_mac_agent.py "$AGENT_SCRIPT"
+cp command_auth.py "$AGENT_DIR/command_auth.py"
 chmod 700 "$AGENT_SCRIPT"
+chmod 600 "$AGENT_DIR/command_auth.py"
 touch "$LOG_FILE"
 chmod 644 "$LOG_FILE"
 
@@ -47,6 +54,7 @@ cat > "$PLIST" <<EOF
         <key>GUARDIAN_PORT</key>        <string>1883</string>
         <key>GUARDIAN_MQTT_USER</key>   <string>$MQTT_USER</string>
         <key>GUARDIAN_MQTT_PASS</key>   <string>$MQTT_PASS</string>
+        <key>GUARDIAN_COMMAND_SIGNING_KEY</key><string>$COMMAND_SIGNING_KEY</string>
         <key>GUARDIAN_DEVICE_ID</key>   <string>$DEVICE_ID</string>
         <key>GUARDIAN_ABORT_WINDOW</key><string>30</string>
         <key>GUARDIAN_WG_IP</key>       <string>$WG_IP</string>
@@ -60,14 +68,15 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 
-chmod 644 "$PLIST"
+# The LaunchDaemon plist contains MQTT and command-signing credentials.
+chmod 600 "$PLIST"
 chown root:wheel "$PLIST"
 
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load -w "$PLIST"
 
 echo ""
-echo "=== Guardian Mac Agent v2.2.1 installed ==="
+echo "=== Guardian Mac Agent v2.3.0 installed ==="
 echo "  Device     : $DEVICE_ID"
 echo "  Broker     : $BROKER"
 echo "  WireGuard  : ${WG_IP:-not set}"

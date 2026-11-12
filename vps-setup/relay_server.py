@@ -51,6 +51,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 import httpx
+from command_auth import (
+    CommandEnvelopeError,
+    create_signed_envelope,
+    verify_signature as verify_signed_envelope,
+)
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -75,14 +80,17 @@ NUKE_COUNTDOWN   = int(os.getenv("NUKE_COUNTDOWN", 600))
 NUKE_STATE_TTL   = int(os.getenv("NUKE_STATE_TTL", 3600))
 DB_PATH          = os.getenv("GUARDIAN_DB",       "guardian.db")
 
-# HMAC signing key for MQTT commands.
-# Set this env var and copy the same value into every agent.
+# Required protocol-v1 HMAC-SHA256 key: 32 random bytes encoded as 64 hex characters.
+# The same key must be provisioned to every agent until per-device keys are implemented.
 COMMAND_SIGNING_KEY = os.getenv("COMMAND_SIGNING_KEY", "")
-if not COMMAND_SIGNING_KEY:
-    import secrets as _secrets
-    COMMAND_SIGNING_KEY = _secrets.token_hex(32)
-    print("[WARN] COMMAND_SIGNING_KEY not set — generated a random key. "
-          "Agents cannot verify commands until you set a stable shared key in .env")
+
+
+def _validate_command_signing_key() -> None:
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", COMMAND_SIGNING_KEY):
+        raise RuntimeError(
+            "COMMAND_SIGNING_KEY is required and must contain exactly 64 hexadecimal characters"
+        )
+
 
 SESSION_TTL_SECS  = int(os.getenv("SESSION_TTL_SECS",  1800))
 NUKE_MAX_FAILS    = int(os.getenv("NUKE_MAX_FAILS",    5))
@@ -99,9 +107,9 @@ AUTH_WINDOW_SECS  = int(os.getenv("AUTH_WINDOW_SECS",  60))
 AUTH_LOCKOUT_SECS = int(os.getenv("AUTH_LOCKOUT_SECS", 300))
 
 AGENT_VERSIONS = {
-    "windows": "2.2.1",
-    "mac":     "2.2.0",
-    "android": "2.2.0",
+    "windows": "2.4.0",
+    "mac":     "2.3.0",
+    "android": "2.3.0",
 }
 
 # ---------------------------------------------------------------------------
@@ -385,7 +393,7 @@ def db_ack_command(device_id: str, command_id: str,
 def db_enqueue_outbox_command(device_id: str, command: str, params: dict,
                               command_id: str, issued_at: float, ttl: int,
                               destructive: bool = False):
-    payload = _build_command_payload(command_id, command, issued_at, ttl, params)
+    payload = _build_command_payload(device_id, command_id, command, issued_at, ttl, params)
     now = time.time()
     with db_conn() as conn:
         conn.execute(
@@ -409,9 +417,9 @@ def db_claim_nuke_execution_and_enqueue(device_id: str, command_id: str,
     now = time.time()
     burst_id = str(uuid.uuid4())
     burst_payload = _build_command_payload(
-        burst_id, "location_burst", now, 60, {}
+        device_id, burst_id, "location_burst", now, 60, {}
     )
-    wipe_payload = _build_command_payload(command_id, "wipe", issued_at, ttl, {})
+    wipe_payload = _build_command_payload(device_id, command_id, "wipe", issued_at, ttl, {})
     burst_created_at = now
     wipe_created_at = now + 0.001
     wipe_next_attempt_at = now + 3.0
@@ -827,25 +835,31 @@ def verify_totp(secret: str, token: str, window: int = 1) -> bool:
 # ---------------------------------------------------------------------------
 # COMMAND SIGNING (HMAC-SHA256)
 # ---------------------------------------------------------------------------
-def sign_command(command_id: str, command: str, issued_at: float) -> str:
-    msg = f"{command_id}:{command}:{issued_at}".encode()
-    return hmac.new(
-        COMMAND_SIGNING_KEY.encode(),
-        msg,
-        hashlib.sha256,
-    ).hexdigest()
+def sign_command(device_id: str, command_id: str, command: str,
+                 issued_at: float, ttl: int, params: dict) -> str:
+    envelope = create_signed_envelope(
+        signing_key=COMMAND_SIGNING_KEY,
+        device_id=device_id,
+        command_id=command_id,
+        command=command,
+        issued_at=int(issued_at),
+        ttl=int(ttl),
+        params=params,
+    )
+    return envelope["sig"]
 
 
-def _build_command_payload(command_id: str, command: str, issued_at: float,
-                           ttl: int, params: dict) -> dict:
-    return {
-        "command": command,
-        "params": params,
-        "issued_at": issued_at,
-        "ttl": ttl,
-        "id": command_id,
-        "sig": sign_command(command_id, command, issued_at),
-    }
+def _build_command_payload(device_id: str, command_id: str, command: str,
+                           issued_at: float, ttl: int, params: dict) -> dict:
+    return create_signed_envelope(
+        signing_key=COMMAND_SIGNING_KEY,
+        device_id=device_id,
+        command_id=command_id,
+        command=command,
+        issued_at=int(issued_at),
+        ttl=int(ttl),
+        params=params,
+    )
 
 
 def _publish_outbox_command(command_id: str) -> bool:
@@ -896,10 +910,12 @@ async def outbox_dispatcher_task():
             print(f"[OUTBOX] Dispatcher error: {type(exc).__name__}: {exc}")
             await asyncio.sleep(2)
 
-def verify_command_signature(command_id: str, command: str,
-                              issued_at: float, signature: str) -> bool:
-    expected = sign_command(command_id, command, issued_at)
-    return hmac.compare_digest(expected, signature)
+def verify_command_signature(payload: dict, expected_device_id: str) -> bool:
+    return verify_signed_envelope(
+        payload,
+        signing_key=COMMAND_SIGNING_KEY,
+        expected_device_id=expected_device_id,
+    )
 
 # ---------------------------------------------------------------------------
 # AUTH
@@ -1061,6 +1077,7 @@ mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 
 def mqtt_connect():
+    _validate_command_signing_key()
     if MQTT_TLS:
         _configure_mqtt_tls()
     mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
@@ -1069,7 +1086,7 @@ def mqtt_connect():
 
 def _publish_command(device_id: str, command: str, params: dict,
                      command_id: str, issued_at: float, ttl: int):
-    payload = _build_command_payload(command_id, command, issued_at, ttl, params)
+    payload = _build_command_payload(device_id, command_id, command, issued_at, ttl, params)
     mqtt_client.publish(f"guardian/{device_id}/command", json.dumps(payload), qos=1)
 
 # ---------------------------------------------------------------------------
@@ -1355,11 +1372,23 @@ async def send_command(req: CommandRequest, request: Request):
 
     command_id = str(uuid.uuid4())
     issued_at  = time.time()
-    db_enqueue_outbox_command(
-        req.device_id, req.command, req.params or {},
-        command_id, issued_at, COMMAND_TTL,
-        destructive=False,
-    )
+    try:
+        db_enqueue_outbox_command(
+            req.device_id, req.command, req.params or {},
+            command_id, issued_at, COMMAND_TTL,
+            destructive=False,
+        )
+    except CommandEnvelopeError:
+        audit(
+            "command.rejected",
+            actor_ip=ip,
+            device_id=req.device_id,
+            detail="reason=unsupported_signed_envelope_value",
+        )
+        raise HTTPException(
+            status_code=422,
+            detail="Command parameters contain values unsupported by signed command protocol v1.",
+        )
     db_log_command(command_id, req.device_id, req.command, req.params or {}, issued_at)
     audit("command.queued", actor_ip=ip, device_id=req.device_id,
           detail=f"cmd={req.command} id={command_id}")

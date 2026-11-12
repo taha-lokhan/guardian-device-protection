@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
+from command_auth import verify_and_claim
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -58,14 +60,16 @@ MQTT_BROKER   = os.getenv("GUARDIAN_BROKER",       "YOUR_VPS_IP")
 MQTT_PORT     = int(os.getenv("GUARDIAN_PORT",      1883))
 MQTT_USER     = os.getenv("GUARDIAN_MQTT_USER",     "guardian")
 MQTT_PASS     = os.getenv("GUARDIAN_MQTT_PASS",     "changeme")
+COMMAND_SIGNING_KEY = os.getenv("GUARDIAN_COMMAND_SIGNING_KEY", "")
 DEVICE_ID     = os.getenv("GUARDIAN_DEVICE_ID",     f"win-{platform.node()}")
 ABORT_WINDOW  = int(os.getenv("GUARDIAN_ABORT_WINDOW", 30))
 WG_IP         = os.getenv("GUARDIAN_WG_IP",         "")
 RELAY_URL     = os.getenv("GUARDIAN_RELAY_URL",     "").rstrip("/")
-AGENT_VERSION = "2.3.0"
+AGENT_VERSION = "2.4.0"
 
 LOG_DIR      = os.path.join(os.environ.get("PROGRAMDATA", "C:\\ProgramData"), "Guardian")
 BACKUP_DIR   = os.path.join(LOG_DIR, "backups")
+REPLAY_DB_PATH = os.path.join(LOG_DIR, "command_replay.sqlite3")
 os.makedirs(LOG_DIR,    exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
@@ -393,6 +397,14 @@ def wipe_windows(command_id: str = None):
 # COMMAND HANDLER
 # ---------------------------------------------------------------------------
 def handle_command(payload: dict):
+    if not verify_and_claim(
+        payload,
+        signing_key=COMMAND_SIGNING_KEY,
+        expected_device_id=DEVICE_ID,
+        replay_db_path=REPLAY_DB_PATH,
+    ):
+        log.warning("Rejected command: signature, target, freshness or replay check failed")
+        return
     command   = payload.get("command")
     command_id = payload.get("id")
     issued_at = payload.get("issued_at", 0)
@@ -467,11 +479,27 @@ client.on_connect = lambda c, u, f, rc: (
     c.subscribe(f"guardian/{DEVICE_ID}/command", qos=1),
     send_status(),
 )
-client.on_message = lambda c, u, msg: threading.Thread(
-    target=handle_command,
-    args=(json.loads(msg.payload.decode()),),
-    daemon=True,
-).start()
+
+
+def on_message(c, u, msg):
+    if len(msg.payload) > 64 * 1024:
+        log.warning("Rejected oversized MQTT command payload")
+        return
+    try:
+        payload = json.loads(msg.payload.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("command envelope must be an object")
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        log.warning("Rejected malformed MQTT command payload")
+        return
+    threading.Thread(
+        target=handle_command,
+        args=(payload,),
+        daemon=True,
+    ).start()
+
+
+client.on_message = on_message
 client.on_disconnect = lambda c, u, rc: log.warning(f"Disconnected rc={rc}")
 
 # ---------------------------------------------------------------------------
@@ -489,6 +517,9 @@ def heartbeat():
 # MAIN
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", COMMAND_SIGNING_KEY):
+        log.critical("GUARDIAN_COMMAND_SIGNING_KEY must be configured as 64 hex characters; refusing to connect.")
+        raise SystemExit(1)
     log.info(f"Guardian Windows Agent v{AGENT_VERSION} — {DEVICE_ID}")
     ensure_service_registered()
     check_agent_version()

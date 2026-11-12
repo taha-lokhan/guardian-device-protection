@@ -1,0 +1,41 @@
+name: Guardian Android build and command-auth tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "security/**"
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android compile and signed-command tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Run Android unit tests and compile debug APK
+        run: gradle -p android-app testDebugUnitTest assembleDebug

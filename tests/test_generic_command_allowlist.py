@@ -12,6 +12,8 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vps-setup"))
 import relay_server as relay  # noqa: E402
 
+_REAL_DB_ENQUEUE = relay.db_enqueue_outbox_command
+
 
 @pytest.fixture
 def harness(monkeypatch, tmp_path):
@@ -86,3 +88,27 @@ def test_invalid_device_id_is_rejected_before_dispatch(harness):
 
     assert response.status_code == 400
     assert published == []
+
+
+
+def test_generic_endpoint_returns_422_for_noncanonical_float_params(harness, monkeypatch):
+    client, published, audit_events = harness
+    monkeypatch.setattr(relay, "db_enqueue_outbox_command", _REAL_DB_ENQUEUE)
+    monkeypatch.setattr(relay, "COMMAND_SIGNING_KEY", "0123456789abcdef" * 4)
+    relay.init_db()
+
+    response = client.post(
+        "/command",
+        json={
+            "device_id": "test-device",
+            "command": "ping",
+            "params": {"threshold": 1.5},
+        },
+    )
+
+    assert response.status_code == 422
+    assert published == []
+    assert any(
+        event[1].get("detail") == "reason=unsupported_signed_envelope_value"
+        for event in audit_events
+    )

@@ -4,7 +4,8 @@
 # Usage: sudo bash setup_vps.sh
 
 set -e
-echo "=== Guardian VPS Setup v1 ==="
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+echo "=== Guardian VPS Setup v2 ==="
 
 apt update && apt upgrade -y
 apt install -y wireguard mosquitto mosquitto-clients python3 python3-pip python3-venv ufw curl openssl nginx
@@ -53,8 +54,21 @@ systemctl enable wg-quick@wg0
 systemctl start wg-quick@wg0
 
 echo "Setting up MQTT broker..."
-MQTT_PASS=$(openssl rand -base64 16)
-mosquitto_passwd -b -c /etc/mosquitto/passwd guardian $MQTT_PASS
+MQTT_PASS=$(openssl rand -hex 24)
+MASTER_PASSWORD=$(openssl rand -hex 32)
+TOTP_SECRET=$(python3 -c 'import base64,secrets; print(base64.b32encode(secrets.token_bytes(20)).decode("ascii"))')
+NUKE_PASSPHRASE=$(openssl rand -hex 24)
+COMMAND_SIGNING_KEY=$(openssl rand -hex 32)
+NTFY_TOPIC="guardian-$(openssl rand -hex 12)"
+
+# Avoid putting the MQTT password in process arguments. The plaintext
+# temporary file lives in /run (tmpfs) and is mode 600 before hashing.
+umask 077
+MQTT_PASS_FILE=$(mktemp /run/guardian-mqtt-pass.XXXXXX)
+printf 'guardian:%s\n' "$MQTT_PASS" > "$MQTT_PASS_FILE"
+mosquitto_passwd -U "$MQTT_PASS_FILE"
+install -o root -g root -m 600 "$MQTT_PASS_FILE" /etc/mosquitto/passwd
+rm -f "$MQTT_PASS_FILE"
 
 cat > /etc/mosquitto/conf.d/guardian.conf << EOF
 listener 1883 127.0.0.1
@@ -66,9 +80,30 @@ systemctl enable mosquitto
 systemctl restart mosquitto
 
 echo "Setting up Guardian relay..."
-mkdir -p /opt/guardian
+install -d -o root -g root -m 700 /opt/guardian /etc/guardian /var/lib/guardian
+cp "$SCRIPT_DIR/relay_server.py" "$SCRIPT_DIR/command_auth.py" /opt/guardian/
+chmod 600 /opt/guardian/relay_server.py /opt/guardian/command_auth.py
 python3 -m venv /opt/guardian/venv
-/opt/guardian/venv/bin/pip install fastapi uvicorn paho-mqtt pyotp python-jose[cryptography] passlib bcrypt websockets requests
+/opt/guardian/venv/bin/pip install -r "$SCRIPT_DIR/requirements.txt"
+
+# Generate a locked-down environment file consumed by systemd.
+cat > /etc/guardian/guardian.env << EOF
+MQTT_BROKER=127.0.0.1
+MQTT_PORT=1883
+MQTT_TLS=false
+MQTT_USER=guardian
+MQTT_PASS=$MQTT_PASS
+MASTER_PASSWORD=$MASTER_PASSWORD
+TOTP_SECRET=$TOTP_SECRET
+NUKE_PASSPHRASE=$NUKE_PASSPHRASE
+COMMAND_SIGNING_KEY=$COMMAND_SIGNING_KEY
+NTFY_TOPIC=$NTFY_TOPIC
+COMMAND_TTL=300
+NUKE_COUNTDOWN=600
+GUARDIAN_DB=/var/lib/guardian/guardian.db
+EOF
+chown root:root /etc/guardian/guardian.env
+chmod 600 /etc/guardian/guardian.env
 
 echo "Setting up systemd service for relay..."
 cat > /etc/systemd/system/guardian.service << EOF
@@ -76,6 +111,7 @@ cat > /etc/systemd/system/guardian.service << EOF
 Description=Guardian Relay Server
 After=network.target mosquitto.service
 [Service]
+EnvironmentFile=/etc/guardian/guardian.env
 ExecStart=/opt/guardian/venv/bin/python /opt/guardian/relay_server.py
 WorkingDirectory=/opt/guardian
 Restart=always
@@ -120,13 +156,18 @@ ufw allow from 10.99.0.0/24 to any port 80
 ufw --force enable
 
 cat > /root/guardian_credentials.txt << EOF
-=== GUARDIAN CREDENTIALS v1 — KEEP SAFE — SAVE TO BITWARDEN ===
+=== GUARDIAN CREDENTIALS v2 — KEEP SAFE — SAVE TO BITWARDEN ===
 
 SERVER PUBLIC IP:    $SERVER_IP
 SERVER WG PUBLIC KEY: $SERVER_PUB
 
-MQTT PASSWORD: $MQTT_PASS
 MQTT USER:     guardian
+MQTT PASSWORD: $MQTT_PASS
+MASTER PASSWORD: $MASTER_PASSWORD
+TOTP SECRET (Base32): $TOTP_SECRET
+NUKE PASSPHRASE: $NUKE_PASSPHRASE
+COMMAND SIGNING KEY (64 hex): $COMMAND_SIGNING_KEY
+NTFY TOPIC: $NTFY_TOPIC
 
 DASHBOARD URL: http://10.99.0.1/guardian  (WireGuard must be active)
 RELAY API:     http://10.99.0.1:8443
@@ -166,12 +207,12 @@ AllowedIPs = 10.99.0.0/24
 PersistentKeepalive = 25
 
 --- NEXT STEPS ---
-1. Copy relay_server.py to /opt/guardian/
-2. Edit MASTER_PASSWORD, TOTP_SECRET, MQTT_PASS in relay_server.py
-3. Copy dashboard.html to /var/www/html/guardian/index.html
-4. Run: systemctl start guardian
-5. Add TOTP_SECRET to Authy manually
-6. Save this entire file to Bitwarden
+1. Copy dashboard/dashboard.html to /var/www/html/guardian/index.html
+2. Import TOTP SECRET into your authenticator using Base32 / SHA1 / 6 digits / 30 seconds
+3. Provision the COMMAND SIGNING KEY to each agent during installation
+4. Configure each device's unique MQTT credentials and device ID before enrollment
+5. Start the relay: systemctl start guardian
+6. Save /root/guardian_credentials.txt in Bitwarden; do not share it
 
 --- ADD NEW DEVICE ---
 Run: bash /opt/guardian/add_device.sh <device_name>

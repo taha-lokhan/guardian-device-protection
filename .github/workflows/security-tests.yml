@@ -30,7 +30,10 @@ jobs:
           python -m pip install -r vps-setup/requirements.txt pytest
 
       - name: Compile all Python agents
-        run: python -m compileall -q windows-agent mac-agent
+        run: python -m compileall -q vps-setup windows-agent mac-agent tests
+
+      - name: Validate installer shell syntax
+        run: bash -n vps-setup/setup_vps.sh mac-agent/install_mac.sh
 
       - name: Run isolated security regression tests
         run: pytest -q tests/
