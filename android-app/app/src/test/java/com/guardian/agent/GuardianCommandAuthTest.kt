@@ -1,6 +1,6 @@
 package com.guardian.agent
 
-import org.bouncycastle.util.encoders.Base64
+import java.util.Base64
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.json.JSONObject
@@ -55,12 +55,12 @@ class GuardianCommandAuthTest {
             "{\"command\":\"ping\",\"device_id\":\"synthetic-device-01\",\"id\":\"11111111-1111-4111-8111-111111111111\",\"issued_at\":1800000000,\"key_id\":\"test-key-01\",\"nonce\":\"22222222-2222-4222-8222-222222222222\",\"params\":{\"enabled\":true,\"nested\":{\"count\":2,\"label\":\"synthetic\"}},\"ttl\":300,\"version\":2}",
             canonical
         )
-        val message = ("guardian-command-envelope-v2\\u0000" + canonical)
+        val message = ("guardian-command-envelope-v2\u0000" + canonical)
             .toByteArray(StandardCharsets.UTF_8)
         val verifier = Ed25519Signer()
-        verifier.init(false, Ed25519PublicKeyParameters(Base64.decode(publicKey), 0))
+        verifier.init(false, Ed25519PublicKeyParameters(Base64.getDecoder().decode(publicKey), 0))
         verifier.update(message, 0, message.size)
-        assertTrue(verifier.verifySignature(Base64.decode("IvMM8qubRvw+TT9dsph3V6iTcH+b/IGWmxY5ADojhzSWMOkZDhzpJHoYryRZceQnshtmgaZpEOl8EsQIBOPaBQ==")))
+        assertTrue(verifier.verifySignature(Base64.getDecoder().decode("IvMM8qubRvw+TT9dsph3V6iTcH+b/IGWmxY5ADojhzSWMOkZDhzpJHoYryRZceQnshtmgaZpEOl8EsQIBOPaBQ==")))
     }
 
     @Test
