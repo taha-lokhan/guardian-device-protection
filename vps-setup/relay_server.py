@@ -86,36 +86,60 @@ DB_PATH          = os.getenv("GUARDIAN_DB",       "guardian.db")
 COMMAND_KEY_DIR = os.getenv("COMMAND_KEY_DIR", "/etc/guardian/command-keys")
 
 
+def _safe_key_path(path: str, *, directory: bool = False):
+    """lstat a key-store path and reject symlinks, unsafe types and modes."""
+    import stat
+    info = os.stat(path, follow_symlinks=False)
+    if stat.S_ISLNK(info.st_mode):
+        raise CommandEnvelopeError("key-store symlinks are not permitted")
+    if directory and not stat.S_ISDIR(info.st_mode):
+        raise CommandEnvelopeError("key-store component must be a real directory")
+    if not directory and not stat.S_ISREG(info.st_mode):
+        raise CommandEnvelopeError("key material must be a regular file")
+    return info
+
+
 def _device_key_material(device_id: str, *, private: bool) -> tuple[str, str]:
     _validate_device_id(device_id)
-    device_dir = os.path.join(COMMAND_KEY_DIR, device_id)
-    active_path = os.path.join(device_dir, "active")
     try:
+        root_info = _safe_key_path(COMMAND_KEY_DIR, directory=True)
+        if root_info.st_mode & 0o077:
+            raise CommandEnvelopeError("command key root must be mode 0700 or stricter")
+        device_dir = os.path.join(COMMAND_KEY_DIR, device_id)
+        device_info = _safe_key_path(device_dir, directory=True)
+        if device_info.st_mode & 0o077:
+            raise CommandEnvelopeError("device key directory must be mode 0700 or stricter")
+        active_path = os.path.join(device_dir, "active")
+        active_info = _safe_key_path(active_path)
+        if active_info.st_mode & 0o077:
+            raise CommandEnvelopeError("active key pointer must be mode 0600 or stricter")
         with open(active_path, "r", encoding="ascii") as stream:
             key_id = stream.read(65).strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key_id):
             raise CommandEnvelopeError("device has no valid active signing key")
         suffix = "private" if private else "public"
         key_path = os.path.join(device_dir, f"{key_id}.{suffix}")
-        info = os.stat(key_path, follow_symlinks=False)
-        if not os.path.isfile(key_path):
-            raise CommandEnvelopeError("device signing key is unavailable")
+        info = _safe_key_path(key_path)
         if private and (info.st_mode & 0o077):
             raise CommandEnvelopeError("device private key permissions must be 0600 or stricter")
+        if not private and (info.st_mode & 0o022):
+            raise CommandEnvelopeError("device public key must not be group/world writable")
         with open(key_path, "r", encoding="ascii") as stream:
             encoded_key = stream.read(256).strip()
         return key_id, encoded_key
-    except (OSError, UnicodeError) as exc:
+    except (OSError, UnicodeError, CommandEnvelopeError) as exc:
+        if isinstance(exc, CommandEnvelopeError):
+            raise
         raise CommandEnvelopeError("device signing key is unavailable") from exc
 
 
 def _validate_device_key_store() -> None:
     try:
-        info = os.stat(COMMAND_KEY_DIR, follow_symlinks=False)
-    except OSError as exc:
-        raise RuntimeError("COMMAND_KEY_DIR must exist and be protected before relay startup") from exc
-    if not os.path.isdir(COMMAND_KEY_DIR) or (info.st_mode & 0o077):
-        raise RuntimeError("COMMAND_KEY_DIR must be a directory with permissions 0700 or stricter")
+        info = _safe_key_path(COMMAND_KEY_DIR, directory=True)
+    except (OSError, CommandEnvelopeError) as exc:
+        raise RuntimeError("COMMAND_KEY_DIR must exist as a real protected directory") from exc
+    if info.st_mode & 0o077:
+        raise RuntimeError("COMMAND_KEY_DIR must have permissions 0700 or stricter")
 
 
 SESSION_TTL_SECS  = int(os.getenv("SESSION_TTL_SECS",  1800))
