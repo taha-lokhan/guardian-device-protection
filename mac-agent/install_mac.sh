@@ -17,16 +17,17 @@ read -p "VPS IP/hostname: " BROKER
 read -p "MQTT username [guardian]: " MQTT_USER
 MQTT_USER=${MQTT_USER:-guardian}
 read -s -p "MQTT password: " MQTT_PASS; echo ""
-read -s -p "Command signing key (64 hex characters): " COMMAND_SIGNING_KEY; echo ""
-if [[ ! "$COMMAND_SIGNING_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
-    echo "[!] Command signing key must be exactly 64 hexadecimal characters."
+read -p "Device command key ID: " COMMAND_KEY_ID
+read -p "Device Ed25519 public key (base64): " COMMAND_PUBLIC_KEY
+if [[ ! "$COMMAND_KEY_ID" =~ ^[A-Za-z0-9_-]{1,64}$ || ! "$COMMAND_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+    echo "[!] A valid device key ID and 32-byte base64 Ed25519 public key are required."
     exit 1
 fi
 read -p "Device ID (e.g. mac-home): " DEVICE_ID
 read -p "WireGuard IP for this device (e.g. 10.99.0.2) [leave blank to skip]: " WG_IP
 
 echo "[*] Installing paho-mqtt..."
-pip3 install --quiet paho-mqtt
+pip3 install --quiet paho-mqtt cryptography
 
 mkdir -p "$AGENT_DIR"
 cp guardian_mac_agent.py "$AGENT_SCRIPT"
@@ -54,7 +55,8 @@ cat > "$PLIST" <<EOF
         <key>GUARDIAN_PORT</key>        <string>1883</string>
         <key>GUARDIAN_MQTT_USER</key>   <string>$MQTT_USER</string>
         <key>GUARDIAN_MQTT_PASS</key>   <string>$MQTT_PASS</string>
-        <key>GUARDIAN_COMMAND_SIGNING_KEY</key><string>$COMMAND_SIGNING_KEY</string>
+        <key>GUARDIAN_COMMAND_KEY_ID</key>       <string>$COMMAND_KEY_ID</string>
+        <key>GUARDIAN_COMMAND_PUBLIC_KEY</key>  <string>$COMMAND_PUBLIC_KEY</string>
         <key>GUARDIAN_DEVICE_ID</key>   <string>$DEVICE_ID</string>
         <key>GUARDIAN_ABORT_WINDOW</key><string>30</string>
         <key>GUARDIAN_WG_IP</key>       <string>$WG_IP</string>

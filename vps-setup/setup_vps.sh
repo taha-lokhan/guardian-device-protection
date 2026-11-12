@@ -58,7 +58,6 @@ MQTT_PASS=$(openssl rand -hex 24)
 MASTER_PASSWORD=$(openssl rand -hex 32)
 TOTP_SECRET=$(python3 -c 'import base64,secrets; print(base64.b32encode(secrets.token_bytes(20)).decode("ascii"))')
 NUKE_PASSPHRASE=$(openssl rand -hex 24)
-COMMAND_SIGNING_KEY=$(openssl rand -hex 32)
 NTFY_TOPIC="guardian-$(openssl rand -hex 12)"
 
 # Avoid putting the MQTT password in process arguments. The plaintext
@@ -80,9 +79,10 @@ systemctl enable mosquitto
 systemctl restart mosquitto
 
 echo "Setting up Guardian relay..."
-install -d -o root -g root -m 700 /opt/guardian /etc/guardian /var/lib/guardian
-cp "$SCRIPT_DIR/relay_server.py" "$SCRIPT_DIR/command_auth.py" /opt/guardian/
+install -d -o root -g root -m 700 /opt/guardian /etc/guardian /etc/guardian/command-keys /var/lib/guardian
+cp "$SCRIPT_DIR/relay_server.py" "$SCRIPT_DIR/command_auth.py" "$SCRIPT_DIR/provision_device_key.py" "$SCRIPT_DIR/revoke_device_key.py" /opt/guardian/
 chmod 600 /opt/guardian/relay_server.py /opt/guardian/command_auth.py
+chmod 700 /opt/guardian/provision_device_key.py /opt/guardian/revoke_device_key.py
 python3 -m venv /opt/guardian/venv
 /opt/guardian/venv/bin/pip install -r "$SCRIPT_DIR/requirements.txt"
 
@@ -96,7 +96,7 @@ MQTT_PASS=$MQTT_PASS
 MASTER_PASSWORD=$MASTER_PASSWORD
 TOTP_SECRET=$TOTP_SECRET
 NUKE_PASSPHRASE=$NUKE_PASSPHRASE
-COMMAND_SIGNING_KEY=$COMMAND_SIGNING_KEY
+COMMAND_KEY_DIR=/etc/guardian/command-keys
 NTFY_TOPIC=$NTFY_TOPIC
 COMMAND_TTL=300
 NUKE_COUNTDOWN=600
@@ -166,7 +166,6 @@ MQTT PASSWORD: $MQTT_PASS
 MASTER PASSWORD: $MASTER_PASSWORD
 TOTP SECRET (Base32): $TOTP_SECRET
 NUKE PASSPHRASE: $NUKE_PASSPHRASE
-COMMAND SIGNING KEY (64 hex): $COMMAND_SIGNING_KEY
 NTFY TOPIC: $NTFY_TOPIC
 
 DASHBOARD URL: http://10.99.0.1/guardian  (WireGuard must be active)
@@ -209,13 +208,16 @@ PersistentKeepalive = 25
 --- NEXT STEPS ---
 1. Copy dashboard/dashboard.html to /var/www/html/guardian/index.html
 2. Import TOTP SECRET into your authenticator using Base32 / SHA1 / 6 digits / 30 seconds
-3. Provision the COMMAND SIGNING KEY to each agent during installation
-4. Configure each device's unique MQTT credentials and device ID before enrollment
-5. Start the relay: systemctl start guardian
-6. Save /root/guardian_credentials.txt in Bitwarden; do not share it
+3. Provision a distinct command key for each device: sudo /opt/guardian/venv/bin/python /opt/guardian/provision_device_key.py <device_id>
+4. Copy only the printed public_key and key_id into that device's agent setup; never copy the private key
+5. Configure each device's unique MQTT credentials and device ID before enrollment
+6. Start the relay: systemctl start guardian
+7. Save /root/guardian_credentials.txt in Bitwarden; do not share it
 
 --- ADD NEW DEVICE ---
-Run: bash /opt/guardian/add_device.sh <device_name>
+1. Run: bash /opt/guardian/add_device.sh <device_name>
+2. Provision command key: /opt/guardian/venv/bin/python /opt/guardian/provision_device_key.py <device_id>
+3. Revoke command key: /opt/guardian/venv/bin/python /opt/guardian/revoke_device_key.py <device_id> <key_id>
 EOF
 
 chmod 600 /root/guardian_credentials.txt

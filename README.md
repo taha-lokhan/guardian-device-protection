@@ -35,7 +35,7 @@ guardian-device-protection/
 │   └── .env.template         # Copy to .env before deploy
 ├── mac-agent/
 │   ├── guardian_mac_agent.py # macOS agent (LaunchDaemon)
-│   ├── command_auth.py       # Protocol-v1 verification helper
+│   ├── command_auth.py       # Protocol-v2 Ed25519 verification helper
 │   ├── install_mac.sh        # Installer script
 │   └── requirements.txt
 ├── windows-agent/
@@ -67,24 +67,31 @@ cd mac-agent
 sudo bash install_mac.sh
 ```
 
-The installer prompts for the 64-hex-character `COMMAND_SIGNING_KEY` used by the relay. It installs the matching `command_auth.py` verifier and stores the LaunchDaemon plist with root-only permissions.
+Before installing an agent, provision a key on the relay host:
+```bash
+sudo /opt/guardian/venv/bin/python /opt/guardian/provision_device_key.py mac-home
+``
+Copy only the printed `key_id` and `public_key` into the Mac installer prompts. The Ed25519 private key stays on the relay host. Never copy it to an endpoint.
 
 > ⚠️ For Option A wipe to work, you need a macOS installer app in `/Applications`.
 > Download via: App Store → search "macOS Sequoia" (or current version)
 
 ### 3. Windows Agent
 
-Place `guardian_windows_agent.py` and `command_auth.py` in the same directory, then configure the regular MQTT/device variables and the same 64-hex-character signing key used by the relay:
-
+Place `guardian_windows_agent.py` and `command_auth.py` in the same directory and install dependencies from `windows-agent/requirements.txt`. Provision a unique key on the relay host:
+```bash
+sudo /opt/guardian/venv/bin/python /opt/guardian/provision_device_key.py win-office
+``
+Configure the endpoint with the printed values (the public key is not secret):
 ```powershell
-[Environment]::SetEnvironmentVariable(
-  "GUARDIAN_COMMAND_SIGNING_KEY",
-  "<64-hex-character key from your secret manager>",
-  "Machine"
-)
+[Environment]::SetEnvironmentVariable("GUARDIAN_COMMAND_KEY_ID", "<key_id>", "Machine")
+[Environment]::SetEnvironmentVariable("GUARDIAN_COMMAND_PUBLIC_KEY", "<base64-public-key>", "Machine")
 ```
+Also configure the device ID to exactly match the provisioned ID. Open a new elevated terminal or restart the agent. It refuses to connect without a valid device-specific key ID and public key.
 
-Open a new elevated terminal (or restart the Guardian service) after setting the machine environment variable, then run the agent. The agent refuses to connect when this key is missing or malformed.
+### 4. Android Agent
+
+Build the app from `android-app`. During setup, enter the device ID plus the matching device-specific `key_id` and base64 Ed25519 public key generated on the relay. The Android app stores only the public verification key; the relay private key must never be installed on an endpoint.
 
 ## Nuke System — How It Works
 
@@ -106,7 +113,7 @@ Open a new elevated terminal (or restart the Guardian service) after setting the
 | `TOTP_SECRET` | Base32 TOTP secret |
 | `MASTER_PASSWORD` | Dashboard login password |
 | `NUKE_PASSPHRASE` | Step 1 of nuke confirmation |
-| `COMMAND_SIGNING_KEY` | Required 64-hex-character HMAC-SHA256 key (generate 32 random bytes; share with configured agents) |
+| `COMMAND_KEY_DIR` | Root-owned directory holding per-device Ed25519 private keys (default `/etc/guardian/command-keys`) |
 | `NTFY_TOPIC` | ntfy.sh topic (treat as password) |
 | `COMMAND_TTL` | Seconds before command expires (default: 300) |
 | `NUKE_COUNTDOWN` | Seconds before wipe executes (default: 600) |
@@ -114,13 +121,13 @@ Open a new elevated terminal (or restart the Guardian service) after setting the
 ## Security Notes
 
 - Dashboard is only accessible over **WireGuard VPN**
-- All API endpoints require `Authorization: Bearer password:totp`
+- Protected API endpoints require a login-issued session token
 - TOTP is validated server-side with ±1 window drift
 - `NTFY_TOPIC` is secret — treat it like a password
-- Protocol-v1 command envelopes are HMAC-SHA256 signed over version, command ID, target device, command, params, issue time and TTL.
+- Protocol-v2 command envelopes use Ed25519 signatures over a canonical envelope binding protocol version, key ID, command ID, target device, command, params, issue time, TTL and a unique nonce.
 - Protocol-v1 command params use canonical JSON with null, booleans, strings, safe integers, arrays and objects; floating-point values and non-ASCII object keys are rejected to keep Python/Kotlin byte serialization consistent.
-- Windows, macOS and Android agents fail closed on missing/invalid signatures, wrong-target commands, expired/future commands and replayed command IDs.
-- Protocol v1 uses one shared signing key across agents; per-device key provisioning and rotation remain a separate hardening task.
+- Windows, macOS and Android agents verify the Ed25519 signature against the device-specific pinned public key before dispatch and fail closed on unknown key IDs, altered fields, wrong targets, expired/future commands and replayed command IDs.
+- The relay holds a separate private key per device under a root-only key directory. Provision with `provision_device_key.py <device_id>`; rotate with `--rotate` and reconfigure that agent with the new public key; revoke with `revoke_device_key.py <device_id> <key_id>` and update the endpoint trust configuration. Rotation/revocation require coordinated agent reconfiguration; no automatic enrollment or remote rotation API is implemented. Protocol v2 intentionally has no fallback to the old shared-key protocol: upgrade the relay and all agents together, and provision each device before sending it commands.
 - Nuke sessions expire after 2 minutes if not completed
 
 ---

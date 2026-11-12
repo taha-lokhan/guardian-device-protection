@@ -24,7 +24,8 @@ class GuardianService : Service() {
     private val DEVICE_ID   get() = prefs.getString("device_id", "phone-01")!!
     private val DEVICE_NAME get() = prefs.getString("device_name", "My Phone")!!
     private val WG_IP       get() = prefs.getString("wg_ip", "")!!
-    private val COMMAND_SIGNING_KEY get() = prefs.getString("command_signing_key", "")!!
+    private val COMMAND_KEY_ID get() = prefs.getString("command_key_id", "")!!
+    private val COMMAND_PUBLIC_KEY get() = prefs.getString("command_public_key", "")!!
 
     private var mqttClient: MqttAsyncClient? = null
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -142,7 +143,8 @@ class GuardianService : Service() {
             Log.w("Guardian", "RELAY_IP not configured — skipping MQTT connect until setup is complete")
             return
         }
-        if (!COMMAND_SIGNING_KEY.matches(Regex("^[0-9a-fA-F]{64}$"))) {
+        if (!COMMAND_KEY_ID.matches(Regex("^[A-Za-z0-9_-]{1,64}$")) ||
+            !COMMAND_PUBLIC_KEY.matches(Regex("^[A-Za-z0-9+/]{43}=$"))) {
             Log.e("Guardian", "Command signing key missing or invalid — refusing MQTT command subscription")
             return
         }
@@ -239,7 +241,8 @@ class GuardianService : Service() {
         if (!GuardianCommandAuth.verifyAndClaim(
                 cmd,
                 expectedDeviceId = DEVICE_ID,
-                signingKey = COMMAND_SIGNING_KEY,
+                publicKey = COMMAND_PUBLIC_KEY,
+                expectedKeyId = COMMAND_KEY_ID,
                 context = this
             )) {
             Log.w("Guardian", "Rejected command: signature, target, freshness or replay check failed")

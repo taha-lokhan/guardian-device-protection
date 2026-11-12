@@ -1,5 +1,6 @@
 """Durable command outbox tests; all broker operations are mocked."""
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ def outbox_db(monkeypatch, tmp_path):
 
 def enqueue(command="ping", destructive=False, command_id="11111111-1111-4111-8111-111111111111"):
     relay.db_enqueue_outbox_command(
-        "device-1", command, {}, command_id, 1000.0, 300,
+        "device-1", command, {}, command_id, time.time(), 300,
         destructive=destructive,
     )
     return command_id
@@ -141,3 +142,20 @@ def test_duplicate_completion_ack_is_idempotent(outbox_db):
         "device-1", command_id, "wipe", "completed"
     ) is False
     assert relay.db_get_outbox_status(command_id)["status"] == "device_completed"
+
+
+def test_expired_queued_command_is_not_published(outbox_db, monkeypatch):
+    command_id = "33333333-3333-4333-8333-333333333333"
+    relay.db_enqueue_outbox_command(
+        "device-1", "ping", {}, command_id, time.time() - 301, 300,
+        destructive=False,
+    )
+    published = []
+    monkeypatch.setattr(
+        relay.mqtt_client, "publish",
+        lambda *args, **kwargs: published.append((args, kwargs)),
+    )
+
+    assert relay._publish_outbox_command(command_id) is False
+    assert published == []
+    assert relay.db_get_outbox_status(command_id)["status"] == "expired"

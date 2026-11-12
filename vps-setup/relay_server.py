@@ -80,16 +80,42 @@ NUKE_COUNTDOWN   = int(os.getenv("NUKE_COUNTDOWN", 600))
 NUKE_STATE_TTL   = int(os.getenv("NUKE_STATE_TTL", 3600))
 DB_PATH          = os.getenv("GUARDIAN_DB",       "guardian.db")
 
-# Required protocol-v1 HMAC-SHA256 key: 32 random bytes encoded as 64 hex characters.
-# The same key must be provisioned to every agent until per-device keys are implemented.
-COMMAND_SIGNING_KEY = os.getenv("COMMAND_SIGNING_KEY", "")
+# Each enrolled device has a distinct Ed25519 signing key pair. The relay
+# stores private keys under a root-owned 0700 directory; agents receive only
+# their device-specific public key.
+COMMAND_KEY_DIR = os.getenv("COMMAND_KEY_DIR", "/etc/guardian/command-keys")
 
 
-def _validate_command_signing_key() -> None:
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", COMMAND_SIGNING_KEY):
-        raise RuntimeError(
-            "COMMAND_SIGNING_KEY is required and must contain exactly 64 hexadecimal characters"
-        )
+def _device_key_material(device_id: str, *, private: bool) -> tuple[str, str]:
+    _validate_device_id(device_id)
+    device_dir = os.path.join(COMMAND_KEY_DIR, device_id)
+    active_path = os.path.join(device_dir, "active")
+    try:
+        with open(active_path, "r", encoding="ascii") as stream:
+            key_id = stream.read(65).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key_id):
+            raise CommandEnvelopeError("device has no valid active signing key")
+        suffix = "private" if private else "public"
+        key_path = os.path.join(device_dir, f"{key_id}.{suffix}")
+        info = os.stat(key_path, follow_symlinks=False)
+        if not os.path.isfile(key_path):
+            raise CommandEnvelopeError("device signing key is unavailable")
+        if private and (info.st_mode & 0o077):
+            raise CommandEnvelopeError("device private key permissions must be 0600 or stricter")
+        with open(key_path, "r", encoding="ascii") as stream:
+            encoded_key = stream.read(256).strip()
+        return key_id, encoded_key
+    except (OSError, UnicodeError) as exc:
+        raise CommandEnvelopeError("device signing key is unavailable") from exc
+
+
+def _validate_device_key_store() -> None:
+    try:
+        info = os.stat(COMMAND_KEY_DIR, follow_symlinks=False)
+    except OSError as exc:
+        raise RuntimeError("COMMAND_KEY_DIR must exist and be protected before relay startup") from exc
+    if not os.path.isdir(COMMAND_KEY_DIR) or (info.st_mode & 0o077):
+        raise RuntimeError("COMMAND_KEY_DIR must be a directory with permissions 0700 or stricter")
 
 
 SESSION_TTL_SECS  = int(os.getenv("SESSION_TTL_SECS",  1800))
@@ -375,19 +401,14 @@ def db_log_command(command_id: str, device_id: str, command: str,
             (device_id, device_id),
         )
 
-def db_ack_command(device_id: str, command_id: str,
-                   command: str, status: str) -> bool:
-    """Update only the exact command identified by a device ACK."""
-    if not isinstance(command_id, str) or not command_id:
-        return False
+def db_ack_command(device_id: str, command: str, status: str):
     with db_conn() as conn:
-        cursor = conn.execute(
+        conn.execute(
             "UPDATE command_log SET status=?, ack_at=? "
-            "WHERE command_id=? AND device_id=? AND command=? "
-            "AND status IN ('queued', 'sent')",
-            (status, time.time(), command_id, device_id, command),
+            "WHERE device_id=? AND command=? AND status='sent' "
+            "ORDER BY issued_at DESC LIMIT 1",
+            (status, time.time(), device_id, command),
         )
-        return cursor.rowcount == 1
 
 
 def db_enqueue_outbox_command(device_id: str, command: str, params: dict,
@@ -521,6 +542,17 @@ def db_mark_outbox_device_acked(device_id: str, command_id: str,
         return cursor.rowcount == 1
 
 
+def db_mark_outbox_expired(command_id: str, reason: str = "Command expired before MQTT publication"):
+    now = time.time()
+    with db_conn() as conn:
+        cursor = conn.execute(
+            "UPDATE command_outbox SET status='expired', updated_at=?, last_error=? "
+            "WHERE command_id=? AND status='publishing'",
+            (now, reason[:500], command_id),
+        )
+        return cursor.rowcount == 1
+
+
 def db_mark_outbox_failure(command_id: str, error: str, *, uncertain: bool):
     now = time.time()
     with db_conn() as conn:
@@ -624,18 +656,16 @@ def db_delete_session(token: str):
 def db_upsert_nuke_state(device_id: str, state: dict):
     with db_conn() as conn:
         conn.execute(
-            "INSERT INTO nuke_state(device_id, active, started_at, aborted, executed, execution_claimed, countdown_secs) "
-            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET "
+            "INSERT INTO nuke_state(device_id, active, started_at, aborted, executed, countdown_secs) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET "
             "active=excluded.active, started_at=excluded.started_at, "
-            "aborted=excluded.aborted, executed=excluded.executed, "
-            "execution_claimed=excluded.execution_claimed, countdown_secs=excluded.countdown_secs",
+            "aborted=excluded.aborted, executed=excluded.executed, countdown_secs=excluded.countdown_secs",
             (
                 device_id,
                 1 if state.get("active") else 0,
                 state.get("started_at", time.time()),
                 1 if state.get("aborted") else 0,
                 1 if state.get("executed") else 0,
-                1 if state.get("execution_claimed") else 0,
                 state.get("countdown_seconds", NUKE_COUNTDOWN),
             ),
         )
@@ -837,22 +867,17 @@ def verify_totp(secret: str, token: str, window: int = 1) -> bool:
 # ---------------------------------------------------------------------------
 def sign_command(device_id: str, command_id: str, command: str,
                  issued_at: float, ttl: int, params: dict) -> str:
-    envelope = create_signed_envelope(
-        signing_key=COMMAND_SIGNING_KEY,
-        device_id=device_id,
-        command_id=command_id,
-        command=command,
-        issued_at=int(issued_at),
-        ttl=int(ttl),
-        params=params,
-    )
-    return envelope["sig"]
+    return _build_command_payload(
+        device_id, command_id, command, issued_at, ttl, params
+    )["sig"]
 
 
 def _build_command_payload(device_id: str, command_id: str, command: str,
                            issued_at: float, ttl: int, params: dict) -> dict:
+    key_id, private_key = _device_key_material(device_id, private=True)
     return create_signed_envelope(
-        signing_key=COMMAND_SIGNING_KEY,
+        signing_key=private_key,
+        key_id=key_id,
         device_id=device_id,
         command_id=command_id,
         command=command,
@@ -868,6 +893,23 @@ def _publish_outbox_command(command_id: str) -> bool:
     if not row:
         return False
     try:
+        try:
+            envelope = json.loads(row["payload"])
+        except (TypeError, ValueError):
+            db_mark_outbox_expired(command_id, "Stored command envelope is malformed")
+            return False
+        issued_at = envelope.get("issued_at")
+        ttl = envelope.get("ttl")
+        now_seconds = int(time.time())
+        if (
+            type(issued_at) is not int
+            or type(ttl) is not int
+            or not 1 <= ttl <= 3600
+            or issued_at > now_seconds + 60
+            or now_seconds - issued_at > ttl
+        ):
+            db_mark_outbox_expired(command_id)
+            return False
         info = mqtt_client.publish(row["topic"], row["payload"], qos=1)
         rc = getattr(info, "rc", mqtt.MQTT_ERR_SUCCESS)
         if rc != mqtt.MQTT_ERR_SUCCESS:
@@ -911,10 +953,15 @@ async def outbox_dispatcher_task():
             await asyncio.sleep(2)
 
 def verify_command_signature(payload: dict, expected_device_id: str) -> bool:
+    try:
+        key_id, public_key = _device_key_material(expected_device_id, private=False)
+    except CommandEnvelopeError:
+        return False
     return verify_signed_envelope(
         payload,
-        signing_key=COMMAND_SIGNING_KEY,
+        public_key=public_key,
         expected_device_id=expected_device_id,
+        expected_key_id=key_id,
     )
 
 # ---------------------------------------------------------------------------
@@ -1047,37 +1094,24 @@ def on_message(client, userdata, msg):
         cmd = payload.get("command", "")
         status = str(payload.get("status", "ack"))
         command_id = payload.get("id") or payload.get("command_id")
-        if not isinstance(command_id, str) or not command_id:
-            print(f"[ACK] Dropping uncorrelated ACK from {device_id}: missing command ID")
-            return
-
-        # An ACK is accepted only when it matches both the command log and the
-        # durable outbox record. Never mutate state based on a topic/name alone.
-        log_updated = db_ack_command(device_id, command_id, cmd, status)
-        outbox_updated = db_mark_outbox_device_acked(device_id, command_id, cmd, status)
-        if not log_updated and not outbox_updated:
-            print(f"[ACK] Dropping unmatched ACK from {device_id}: {cmd} id={command_id}")
-            return
-
-        # A completion signal must match the exact outstanding wipe command.
-        # A receipt/initiating ACK is not proof that a wipe completed.
-        if cmd == "wipe" and status == "completed" and outbox_updated:
+        db_ack_command(device_id, cmd, status)
+        if isinstance(command_id, str) and command_id:
+            db_mark_outbox_device_acked(device_id, command_id, cmd, status)
+        # Only an explicit device completion acknowledgement may mark a wipe
+        # executed. An "initiating" or receipt ACK is not proof of completion.
+        if cmd in ("wipe", "wipe_complete") and status == "completed" and isinstance(command_id, str):
             state = db_get_nuke_state(device_id)
-            if state and not state.get("aborted") and state.get("execution_claimed"):
-                # Transition only a wipe execution that was claimed by the
-                # durable nuke workflow. The matching outbox update above is
-                # necessary but not sufficient when a stale command-log row
-                # happens to share an ID.
+            if state and not state.get("aborted"):
                 state["executed"] = True
                 state["active"] = False
                 db_upsert_nuke_state(device_id, state)
-        print(f"[ACK] {device_id} -> {cmd}: {status} id={command_id}")
+        print(f"[ACK] {device_id} -> {cmd}: {status}")
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 
 def mqtt_connect():
-    _validate_command_signing_key()
+    _validate_device_key_store()
     if MQTT_TLS:
         _configure_mqtt_tls()
     mqtt_client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)

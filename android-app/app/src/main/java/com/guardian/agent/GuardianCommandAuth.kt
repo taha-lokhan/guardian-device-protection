@@ -8,28 +8,28 @@ import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
+import android.util.Base64
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
 
 /**
- * Verifies Guardian protocol-v1 command envelopes before any command handler runs.
+ * Verifies Guardian protocol-v2 Ed25519 command envelopes before any command handler runs.
  *
  * Canonical JSON is intentionally restricted to strings, booleans, null, safe
  * integers, arrays and objects with short ASCII keys. This keeps the Python and
  * Android implementations byte-for-byte interoperable.
  */
 internal object GuardianCommandAuth {
-    private const val PROTOCOL_VERSION = 1L
+    private const val PROTOCOL_VERSION = 2L
     private const val MAX_TTL_SECONDS = 3600L
     private const val MAX_CLOCK_SKEW_SECONDS = 60L
     private const val REPLAY_RETENTION_SECONDS = 7L * 24L * 60L * 60L
     private const val MAX_SAFE_INTEGER = 9007199254740991L
     private const val MAX_CANONICAL_BYTES = 64 * 1024
-    internal const val REPLAY_TABLE = "processed_commands"
+    internal const val REPLAY_TABLE = "processed_commands_v2"
 
     private val signedFields = listOf(
-        "version", "id", "device_id", "command", "params", "issued_at", "ttl"
+        "version", "key_id", "id", "device_id", "command", "params", "issued_at", "ttl", "nonce"
     )
     private val envelopeFields = (signedFields + "sig").toSet()
     private val allowedCommands = setOf(
@@ -38,7 +38,8 @@ internal object GuardianCommandAuth {
     )
     private val commandIdPattern =
         Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
-    private val hexPattern = Regex("^[0-9a-fA-F]{64}$")
+    private val base64KeyPattern = Regex("^[A-Za-z0-9+/]{43}=$")
+    private val base64SignaturePattern = Regex("^[A-Za-z0-9+/]{86}==$")
     private val deviceIdPattern = Regex("^[A-Za-z0-9_-]{1,64}$")
     private val integerPattern = Regex("^-?(0|[1-9][0-9]*)$")
     private val objectKeyPattern = Regex("^[A-Za-z0-9_.-]{1,128}$")
@@ -47,42 +48,42 @@ internal object GuardianCommandAuth {
     fun verifyAndClaim(
         payload: JSONObject,
         expectedDeviceId: String,
-        signingKey: String,
+        publicKey: String,
+        expectedKeyId: String,
         context: Context,
         nowSeconds: Long = System.currentTimeMillis() / 1000L
     ): Boolean {
-        if (!verifySignature(payload, expectedDeviceId, signingKey, nowSeconds)) {
+        if (!verifySignature(payload, expectedDeviceId, publicKey, expectedKeyId, nowSeconds)) {
             return false
         }
         val commandId = payload.optString("id", "")
-        return claimCommandId(commandId, context, nowSeconds)
+        return claimCommandId(commandId, payload.optString("nonce", ""), expectedDeviceId, context, nowSeconds)
     }
 
     internal fun verifySignature(
         payload: JSONObject,
         expectedDeviceId: String,
-        signingKey: String,
+        publicKey: String,
+        expectedKeyId: String,
         nowSeconds: Long
     ): Boolean {
         return try {
             val actualFields = payload.keys().asSequence().toSet()
             if (actualFields != envelopeFields) return false
-            if (!hexPattern.matches(signingKey)) return false
-
+            if (!base64KeyPattern.matches(publicKey)) return false
+            if (!Regex("^[A-Za-z0-9_-]{1,64}$").matches(expectedKeyId)) return false
             val version = strictInteger(payload.opt("version")) ?: return false
             if (version != PROTOCOL_VERSION) return false
+            if ((payload.opt("key_id") as? String) != expectedKeyId) return false
 
             val commandId = payload.opt("id") as? String ?: return false
             if (!commandIdPattern.matches(commandId)) return false
-
+            val nonce = payload.opt("nonce") as? String ?: return false
+            if (!commandIdPattern.matches(nonce)) return false
             val target = payload.opt("device_id") as? String ?: return false
             if (!deviceIdPattern.matches(target) || target != expectedDeviceId) return false
-
             val command = payload.opt("command") as? String ?: return false
-            if (command !in allowedCommands) return false
-
-            val params = payload.opt("params")
-            if (params !is JSONObject) return false
+            if (command !in allowedCommands || payload.opt("params") !is JSONObject) return false
 
             val issuedAt = strictInteger(payload.opt("issued_at")) ?: return false
             val ttl = strictInteger(payload.opt("ttl")) ?: return false
@@ -91,52 +92,49 @@ internal object GuardianCommandAuth {
             if (issuedAt > nowSeconds + MAX_CLOCK_SKEW_SECONDS) return false
             if (age > ttl || age < -MAX_CLOCK_SKEW_SECONDS) return false
 
-            val suppliedSignature = payload.opt("sig") as? String ?: return false
-            if (!hexPattern.matches(suppliedSignature)) return false
-
+            val signatureText = payload.opt("sig") as? String ?: return false
+            if (!base64SignaturePattern.matches(signatureText)) return false
+            val signatureBytes = Base64.decode(signatureText, Base64.DEFAULT)
+            if (signatureBytes.size != 64) return false
             val unsigned = JSONObject()
-            for (field in signedFields) {
-                unsigned.put(field, payload.get(field))
-            }
-            val message = canonicalJson(unsigned).toByteArray(StandardCharsets.UTF_8)
+            for (field in signedFields) unsigned.put(field, payload.get(field))
+            val message = ("guardian-command-envelope-v2\u0000" + canonicalJson(unsigned))
+                .toByteArray(StandardCharsets.UTF_8)
             if (message.size > MAX_CANONICAL_BYTES) return false
-
-            val mac = Mac.getInstance("HmacSHA256")
-            mac.init(SecretKeySpec(hexToBytes(signingKey), "HmacSHA256"))
-            val expectedSignature = mac.doFinal(message)
-            MessageDigest.isEqual(expectedSignature, hexToBytes(suppliedSignature))
+            val publicBytes = Base64.decode(publicKey, Base64.DEFAULT)
+            if (publicBytes.size != 32) return false
+            val verifier = Ed25519Signer()
+            verifier.init(false, Ed25519PublicKeyParameters(publicBytes, 0))
+            verifier.update(message, 0, message.size)
+            verifier.verifySignature(signatureBytes)
         } catch (_: Exception) {
             false
         }
     }
 
     private fun claimCommandId(
-        commandId: String,
-        context: Context,
-        nowSeconds: Long
+        commandId: String, nonce: String, deviceId: String,
+        context: Context, nowSeconds: Long
     ): Boolean {
+        if (!commandIdPattern.matches(commandId) || !commandIdPattern.matches(nonce)) return false
         val helper = GuardianReplayDatabase(context.applicationContext)
         var db: SQLiteDatabase? = null
         return try {
             db = helper.writableDatabase
             db.beginTransaction()
-            db.delete(
-                REPLAY_TABLE,
-                "received_at < ?",
-                arrayOf((nowSeconds - REPLAY_RETENTION_SECONDS).toString())
-            )
+            db.delete(REPLAY_TABLE, "received_at < ?", arrayOf((nowSeconds - REPLAY_RETENTION_SECONDS).toString()))
             val values = ContentValues().apply {
+                put("device_id", deviceId)
                 put("command_id", commandId)
+                put("nonce", nonce)
                 put("received_at", nowSeconds)
             }
-            // command_id is a PRIMARY KEY: duplicate claims fail atomically.
             db.insertOrThrow(REPLAY_TABLE, null, values)
             db.setTransactionSuccessful()
             true
         } catch (_: SQLiteConstraintException) {
             false
         } catch (_: Exception) {
-            // Fail closed when replay state cannot be persisted.
             false
         } finally {
             if (db != null && db.inTransaction()) db.endTransaction()
@@ -219,32 +217,38 @@ internal object GuardianCommandAuth {
         return out.append('"').toString()
     }
 
-    private fun hexToBytes(value: String): ByteArray {
-        if (value.length % 2 != 0) throw IllegalArgumentException("Invalid hex")
-        return ByteArray(value.length / 2) { index ->
-            value.substring(index * 2, index * 2 + 2).toInt(16).toByte()
-        }
-    }
 }
 
 
 /** App-private persistent replay store with atomic command-ID uniqueness. */
 private class GuardianReplayDatabase(context: Context) :
-    SQLiteOpenHelper(context, "guardian-command-replay.db", null, 1) {
+    SQLiteOpenHelper(context, "guardian-command-replay.db", null, 2) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
-            "CREATE TABLE IF NOT EXISTS processed_commands (" +
-                "command_id TEXT PRIMARY KEY NOT NULL, " +
-                "received_at INTEGER NOT NULL)"
+            "CREATE TABLE IF NOT EXISTS processed_commands_v2 (" +
+                "device_id TEXT NOT NULL, command_id TEXT NOT NULL, nonce TEXT NOT NULL, " +
+                "received_at INTEGER NOT NULL, PRIMARY KEY(device_id, command_id), " +
+                "UNIQUE(device_id, nonce))"
         )
         db.execSQL(
-            "CREATE INDEX IF NOT EXISTS idx_processed_commands_received_at " +
-                "ON processed_commands(received_at)"
+            "CREATE INDEX IF NOT EXISTS idx_processed_commands_v2_received_at " +
+                "ON processed_commands_v2(received_at)"
         )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Version 1 has no earlier schema to migrate from.
+        if (oldVersion < 2) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS processed_commands_v2 (" +
+                    "device_id TEXT NOT NULL, command_id TEXT NOT NULL, nonce TEXT NOT NULL, " +
+                    "received_at INTEGER NOT NULL, PRIMARY KEY(device_id, command_id), " +
+                    "UNIQUE(device_id, nonce))"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS idx_processed_commands_v2_received_at " +
+                    "ON processed_commands_v2(received_at)"
+            )
+        }
     }
 }

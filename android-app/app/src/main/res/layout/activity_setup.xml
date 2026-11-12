@@ -42,9 +42,15 @@
             android:textColor="#cdccca" android:textColorHint="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
 
-        <EditText android:id="@+id/et_command_signing_key"
+        <EditText android:id="@+id/et_command_key_id"
             android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:hint="Command Signing Key (64 hex characters)" android:inputType="textPassword|textNoSuggestions"
+            android:hint="Device Command Key ID" android:inputType="textNoSuggestions"
+            android:textColor="#cdccca" android:textColorHint="#5a5957"
+            android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
+
+        <EditText android:id="@+id/et_command_public_key"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Device Ed25519 Public Key (base64)" android:inputType="textNoSuggestions"
             android:textColor="#cdccca" android:textColorHint="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="32dp"/>
 

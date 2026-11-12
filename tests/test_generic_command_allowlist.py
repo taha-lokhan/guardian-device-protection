@@ -94,7 +94,6 @@ def test_invalid_device_id_is_rejected_before_dispatch(harness):
 def test_generic_endpoint_returns_422_for_noncanonical_float_params(harness, monkeypatch):
     client, published, audit_events = harness
     monkeypatch.setattr(relay, "db_enqueue_outbox_command", _REAL_DB_ENQUEUE)
-    monkeypatch.setattr(relay, "COMMAND_SIGNING_KEY", "0123456789abcdef" * 4)
     relay.init_db()
 
     response = client.post(

@@ -26,8 +26,11 @@ class SetupActivity : AppCompatActivity() {
             findViewById<EditText>(R.id.et_relay_ip).setText(prefs.getString("relay_ip", ""))
             findViewById<EditText>(R.id.et_wg_ip).setText(prefs.getString("wg_ip", ""))
             findViewById<EditText>(R.id.et_mqtt_pass).setText(prefs.getString("mqtt_pass", ""))
-            findViewById<EditText>(R.id.et_command_signing_key).setText(
-                prefs.getString("command_signing_key", "")
+            findViewById<EditText>(R.id.et_command_key_id).setText(
+                prefs.getString("command_key_id", "")
+            )
+            findViewById<EditText>(R.id.et_command_public_key).setText(
+                prefs.getString("command_public_key", "")
             )
             findViewById<Button>(R.id.btn_save).text = "UPDATE GUARDIAN CONFIG"
         }
@@ -38,14 +41,15 @@ class SetupActivity : AppCompatActivity() {
             val deviceId   = findViewById<EditText>(R.id.et_device_id).text.toString().trim()
             val deviceName = findViewById<EditText>(R.id.et_device_name).text.toString().trim()
             val wgIp       = findViewById<EditText>(R.id.et_wg_ip).text.toString().trim()
-            val commandSigningKey = findViewById<EditText>(R.id.et_command_signing_key)
-                .text.toString().trim()
+            val commandKeyId = findViewById<EditText>(R.id.et_command_key_id).text.toString().trim()
+            val commandPublicKey = findViewById<EditText>(R.id.et_command_public_key).text.toString().trim()
 
             if (relayIp.isEmpty() || mqttPass.isEmpty() || deviceId.isEmpty() ||
-                !commandSigningKey.matches(Regex("^[0-9a-fA-F]{64}$"))) {
+                !commandKeyId.matches(Regex("^[A-Za-z0-9_-]{1,64}$")) ||
+                !commandPublicKey.matches(Regex("^[A-Za-z0-9+/]{43}=$"))) {
                 Toast.makeText(
                     this,
-                    "Relay, MQTT, device ID and a 64-character command signing key are required.",
+                    "Relay, MQTT, device ID and the device-specific Ed25519 key ID/public key are required.",
                     Toast.LENGTH_LONG
                 ).show()
                 return@setOnClickListener
@@ -57,7 +61,8 @@ class SetupActivity : AppCompatActivity() {
                 .putString("device_id",  deviceId)
                 .putString("device_name", deviceName)
                 .putString("wg_ip",      wgIp)
-                .putString("command_signing_key", commandSigningKey)
+                .putString("command_key_id", commandKeyId)
+                .putString("command_public_key", commandPublicKey)
                 .putBoolean("configured", true)
                 .apply()
 

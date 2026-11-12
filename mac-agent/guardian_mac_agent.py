@@ -30,7 +30,8 @@ MQTT_BROKER   = os.getenv("GUARDIAN_BROKER", "YOUR_VPS_IP")
 MQTT_PORT     = int(os.getenv("GUARDIAN_PORT", 1883))
 MQTT_USER     = os.getenv("GUARDIAN_MQTT_USER", "guardian")
 MQTT_PASS     = os.getenv("GUARDIAN_MQTT_PASS", "changeme")
-COMMAND_SIGNING_KEY = os.getenv("GUARDIAN_COMMAND_SIGNING_KEY", "")
+COMMAND_KEY_ID = os.getenv("GUARDIAN_COMMAND_KEY_ID", "")
+COMMAND_PUBLIC_KEY = os.getenv("GUARDIAN_COMMAND_PUBLIC_KEY", "")
 DEVICE_ID     = os.getenv("GUARDIAN_DEVICE_ID", f"mac-{platform.node()}")
 ABORT_WINDOW  = int(os.getenv("GUARDIAN_ABORT_WINDOW", 30))
 WG_IP         = os.getenv("GUARDIAN_WG_IP", "")   # WireGuard IP shown in dashboard
@@ -183,7 +184,8 @@ def show_abort_window(seconds: int) -> bool:
 def handle_command(payload: dict):
     if not verify_and_claim(
         payload,
-        signing_key=COMMAND_SIGNING_KEY,
+        public_key=COMMAND_PUBLIC_KEY,
+        expected_key_id=COMMAND_KEY_ID,
         expected_device_id=DEVICE_ID,
         replay_db_path=REPLAY_DB_PATH,
     ):
@@ -292,8 +294,9 @@ def heartbeat():
 
 
 if __name__ == "__main__":
-    if not re.fullmatch(r"[0-9a-fA-F]{64}", COMMAND_SIGNING_KEY):
-        log.critical("GUARDIAN_COMMAND_SIGNING_KEY must be configured as 64 hex characters; refusing to connect.")
+    if (not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", COMMAND_KEY_ID)
+            or not re.fullmatch(r"[A-Za-z0-9+/]{43}=", COMMAND_PUBLIC_KEY)):
+        log.critical("A valid device-specific Ed25519 key ID and base64 public key are required; refusing to connect.")
         raise SystemExit(1)
     log.info(f"Guardian Mac Agent {AGENT_VERSION} -- {DEVICE_ID}")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)

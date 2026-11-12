@@ -6,13 +6,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GuardianCommandAuthTest {
-    private val key = "0123456789abcdef".repeat(4)
+    private val publicKey = "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w="
     private val target = "synthetic-device-01"
+    private val keyId = "test-key-01"
 
     private fun knownVector(): JSONObject = JSONObject(
         """
         {
-          "version": 1,
+          "version": 2,
+          "key_id": "test-key-01",
           "id": "11111111-1111-4111-8111-111111111111",
           "device_id": "synthetic-device-01",
           "command": "ping",
@@ -22,73 +24,62 @@ class GuardianCommandAuthTest {
           },
           "issued_at": 1800000000,
           "ttl": 300,
-          "sig": "dbdf8209050af0b8bf753f038bc035d44a2873ca8760eadaddd34c8a9b54194e"
+          "nonce": "22222222-2222-4222-8222-222222222222",
+          "sig": "IvMM8qubRvw+TT9dsph3V6iTcH+b/IGWmxY5ADojhzSWMOkZDhzpJHoYryRZceQnshtmgaZpEOl8EsQIBOPaBQ=="
         }
         """.trimIndent()
     )
 
     @Test
-    fun acceptsPythonProtocolV1KnownVector() {
-        assertTrue(
-            GuardianCommandAuth.verifySignature(
-                knownVector(), target, key, 1800000001L
-            )
-        )
+    fun acceptsPythonEd25519ProtocolV2KnownVector() {
+        assertTrue(GuardianCommandAuth.verifySignature(
+            knownVector(), target, publicKey, keyId, 1800000001L
+        ))
     }
 
     @Test
-    fun rejectsModifiedNestedParams() {
-        val payload = knownVector()
-        payload.getJSONObject("params")
-            .getJSONObject("nested")
-            .put("count", 3)
-
-        assertFalse(
-            GuardianCommandAuth.verifySignature(
-                payload, target, key, 1800000001L
-            )
-        )
+    fun rejectsModifiedNestedParamsAndUnknownKeyId() {
+        val changed = knownVector()
+        changed.getJSONObject("params").getJSONObject("nested").put("count", 3)
+        assertFalse(GuardianCommandAuth.verifySignature(
+            changed, target, publicKey, keyId, 1800000001L
+        ))
+        assertFalse(GuardianCommandAuth.verifySignature(
+            knownVector(), target, publicKey, "revoked-key", 1800000001L
+        ))
     }
 
     @Test
-    fun rejectsWrongTargetDevice() {
-        assertFalse(
-            GuardianCommandAuth.verifySignature(
-                knownVector(), "synthetic-device-02", key, 1800000001L
-            )
-        )
+    fun rejectsWrongTargetAndAlteredNonce() {
+        assertFalse(GuardianCommandAuth.verifySignature(
+            knownVector(), "synthetic-device-02", publicKey, keyId, 1800000001L
+        ))
+        val altered = knownVector().put("nonce", "33333333-3333-4333-8333-333333333333")
+        assertFalse(GuardianCommandAuth.verifySignature(
+            altered, target, publicKey, keyId, 1800000001L
+        ))
     }
 
     @Test
     fun rejectsExpiredAndFutureCommands() {
-        assertFalse(
-            GuardianCommandAuth.verifySignature(
-                knownVector(), target, key, 1800000400L
-            )
-        )
-
+        assertFalse(GuardianCommandAuth.verifySignature(
+            knownVector(), target, publicKey, keyId, 1800000400L
+        ))
         val future = knownVector().put("issued_at", 1800000061L)
-        assertFalse(
-            GuardianCommandAuth.verifySignature(
-                future, target, key, 1800000000L
-            )
-        )
+        assertFalse(GuardianCommandAuth.verifySignature(
+            future, target, publicKey, keyId, 1800000000L
+        ))
     }
 
     @Test
     fun rejectsSignatureAndEnvelopeShapeTampering() {
-        val badSignature = knownVector().put("sig", "0".repeat(64))
-        assertFalse(
-            GuardianCommandAuth.verifySignature(
-                badSignature, target, key, 1800000001L
-            )
-        )
-
+        val badSignature = knownVector().put("sig", "A".repeat(88))
+        assertFalse(GuardianCommandAuth.verifySignature(
+            badSignature, target, publicKey, keyId, 1800000001L
+        ))
         val extraField = knownVector().put("unexpected", true)
-        assertFalse(
-            GuardianCommandAuth.verifySignature(
-                extraField, target, key, 1800000001L
-            )
-        )
+        assertFalse(GuardianCommandAuth.verifySignature(
+            extraField, target, publicKey, keyId, 1800000001L
+        ))
     }
 }
