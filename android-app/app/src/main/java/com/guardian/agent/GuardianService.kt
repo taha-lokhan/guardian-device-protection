@@ -144,7 +144,7 @@ class GuardianService : Service() {
             return
         }
         if (!COMMAND_KEY_ID.matches(Regex("^[A-Za-z0-9_-]{1,64}$")) ||
-            !COMMAND_PUBLIC_KEY.matches(Regex("^[A-Za-z0-9+/]{43}=$"))) {
+            !GuardianCommandAuth.isValidPublicKey(COMMAND_PUBLIC_KEY)) {
             Log.e("Guardian", "Command signing key missing or invalid — refusing MQTT command subscription")
             return
         }
