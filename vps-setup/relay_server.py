@@ -367,14 +367,19 @@ def db_log_command(command_id: str, device_id: str, command: str,
             (device_id, device_id),
         )
 
-def db_ack_command(device_id: str, command: str, status: str):
+def db_ack_command(device_id: str, command_id: str,
+                   command: str, status: str) -> bool:
+    """Update only the exact command identified by a device ACK."""
+    if not isinstance(command_id, str) or not command_id:
+        return False
     with db_conn() as conn:
-        conn.execute(
+        cursor = conn.execute(
             "UPDATE command_log SET status=?, ack_at=? "
-            "WHERE device_id=? AND command=? AND status='sent' "
-            "ORDER BY issued_at DESC LIMIT 1",
-            (status, time.time(), device_id, command),
+            "WHERE command_id=? AND device_id=? AND command=? "
+            "AND status IN ('queued', 'sent')",
+            (status, time.time(), command_id, device_id, command),
         )
+        return cursor.rowcount == 1
 
 
 def db_enqueue_outbox_command(device_id: str, command: str, params: dict,
@@ -1024,18 +1029,27 @@ def on_message(client, userdata, msg):
         cmd = payload.get("command", "")
         status = str(payload.get("status", "ack"))
         command_id = payload.get("id") or payload.get("command_id")
-        db_ack_command(device_id, cmd, status)
-        if isinstance(command_id, str) and command_id:
-            db_mark_outbox_device_acked(device_id, command_id, cmd, status)
-        # Only an explicit device completion acknowledgement may mark a wipe
-        # executed. An "initiating" or receipt ACK is not proof of completion.
-        if cmd in ("wipe", "wipe_complete") and status == "completed" and isinstance(command_id, str):
+        if not isinstance(command_id, str) or not command_id:
+            print(f"[ACK] Dropping uncorrelated ACK from {device_id}: missing command ID")
+            return
+
+        # An ACK is accepted only when it matches both the command log and the
+        # durable outbox record. Never mutate state based on a topic/name alone.
+        log_updated = db_ack_command(device_id, command_id, cmd, status)
+        outbox_updated = db_mark_outbox_device_acked(device_id, command_id, cmd, status)
+        if not log_updated and not outbox_updated:
+            print(f"[ACK] Dropping unmatched ACK from {device_id}: {cmd} id={command_id}")
+            return
+
+        # A completion signal must match the exact outstanding wipe command.
+        # A receipt/initiating ACK is not proof that a wipe completed.
+        if cmd == "wipe" and status == "completed" and outbox_updated:
             state = db_get_nuke_state(device_id)
-            if state and not state.get("aborted"):
+            if state and not state.get("aborted") and state.get("execution_claimed"):
                 state["executed"] = True
                 state["active"] = False
                 db_upsert_nuke_state(device_id, state)
-        print(f"[ACK] {device_id} -> {cmd}: {status}")
+        print(f"[ACK] {device_id} -> {cmd}: {status} id={command_id}")
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
