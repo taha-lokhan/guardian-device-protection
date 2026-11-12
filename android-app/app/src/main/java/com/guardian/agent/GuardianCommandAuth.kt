@@ -8,7 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
-import android.util.Base64
+import org.bouncycastle.util.encoders.Base64
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 
@@ -94,14 +94,14 @@ internal object GuardianCommandAuth {
 
             val signatureText = payload.opt("sig") as? String ?: return false
             if (!base64SignaturePattern.matches(signatureText)) return false
-            val signatureBytes = Base64.decode(signatureText, Base64.DEFAULT)
+            val signatureBytes = Base64.decode(signatureText)
             if (signatureBytes.size != 64) return false
             val unsigned = JSONObject()
             for (field in signedFields) unsigned.put(field, payload.get(field))
             val message = ("guardian-command-envelope-v2\u0000" + canonicalJson(unsigned))
                 .toByteArray(StandardCharsets.UTF_8)
             if (message.size > MAX_CANONICAL_BYTES) return false
-            val publicBytes = Base64.decode(publicKey, Base64.DEFAULT)
+            val publicBytes = Base64.decode(publicKey)
             if (publicBytes.size != 32) return false
             val verifier = Ed25519Signer()
             verifier.init(false, Ed25519PublicKeyParameters(publicBytes, 0))
