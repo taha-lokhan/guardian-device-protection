@@ -125,8 +125,18 @@ def test_exact_correlated_ack_updates_only_its_command(harness):
 
 
 def test_only_correlated_completion_can_mark_nuke_executed(harness):
-    command_id = add_command()
-    add_outbox("device-a", command_id)
+    command_id = str(uuid.uuid4())
+    issued_at = time.time()
+    # Create the expected durable nuke command through the production helper.
+    relay.db_enqueue_outbox_command(
+        "device-a", "wipe", {}, command_id, issued_at, 300, destructive=True,
+    )
+    relay.db_log_command(command_id, "device-a", "wipe", {}, issued_at)
+    with sqlite3.connect(relay.DB_PATH) as conn:
+        conn.execute(
+            "UPDATE command_log SET status='sent' WHERE command_id=?",
+            (command_id,),
+        )
     relay.db_upsert_nuke_state("device-a", {
         "active": False,
         "started_at": time.time() - 10,

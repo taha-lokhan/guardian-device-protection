@@ -1046,6 +1046,10 @@ def on_message(client, userdata, msg):
         if cmd == "wipe" and status == "completed" and outbox_updated:
             state = db_get_nuke_state(device_id)
             if state and not state.get("aborted") and state.get("execution_claimed"):
+                # Transition only a wipe execution that was claimed by the
+                # durable nuke workflow. The matching outbox update above is
+                # necessary but not sufficient when a stale command-log row
+                # happens to share an ID.
                 state["executed"] = True
                 state["active"] = False
                 db_upsert_nuke_state(device_id, state)
