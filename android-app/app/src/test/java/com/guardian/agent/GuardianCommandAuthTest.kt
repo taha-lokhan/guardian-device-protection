@@ -115,4 +115,12 @@ class GuardianCommandAuthTest {
             extraField, target, publicKey, keyId, 1800000001L
         ))
     }
+
+    @Test
+    fun validatesDecodedPublicKeyLengthAndEncoding() {
+        assertTrue(GuardianCommandAuth.isValidPublicKey(publicKey))
+        assertFalse(GuardianCommandAuth.isValidPublicKey("A".repeat(44)))
+        assertFalse(GuardianCommandAuth.isValidPublicKey("not-base64"))
+        assertFalse(GuardianCommandAuth.isValidPublicKey(""))
+    }
 }
