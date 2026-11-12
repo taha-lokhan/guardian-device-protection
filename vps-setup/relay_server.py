@@ -661,20 +661,56 @@ def db_delete_session(token: str):
 # ---------------------------------------------------------------------------
 def db_upsert_nuke_state(device_id: str, state: dict):
     with db_conn() as conn:
+        existing = conn.execute(
+            "SELECT execution_claimed, executed, aborted FROM nuke_state WHERE device_id=?",
+            (device_id,),
+        ).fetchone()
+        if (
+            existing
+            and existing["execution_claimed"]
+            and not existing["executed"]
+            and not existing["aborted"]
+            and not state.get("execution_claimed")
+        ):
+            raise ValueError("Cannot clear an unresolved destructive execution claim")
         conn.execute(
-            "INSERT INTO nuke_state(device_id, active, started_at, aborted, executed, countdown_secs) "
-            "VALUES(?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET "
+            "INSERT INTO nuke_state(device_id, active, started_at, aborted, executed, execution_claimed, countdown_secs) "
+            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET "
             "active=excluded.active, started_at=excluded.started_at, "
-            "aborted=excluded.aborted, executed=excluded.executed, countdown_secs=excluded.countdown_secs",
+            "aborted=excluded.aborted, executed=excluded.executed, "
+            "execution_claimed=excluded.execution_claimed, countdown_secs=excluded.countdown_secs",
             (
                 device_id,
                 1 if state.get("active") else 0,
                 state.get("started_at", time.time()),
                 1 if state.get("aborted") else 0,
                 1 if state.get("executed") else 0,
+                1 if state.get("execution_claimed") else 0,
                 state.get("countdown_seconds", NUKE_COUNTDOWN),
             ),
         )
+
+
+def db_can_arm_nuke_state(device_id: str) -> bool:
+    """Block re-arm while a prior countdown or destructive command is unresolved."""
+    with db_conn() as conn:
+        state = conn.execute(
+            "SELECT active, aborted, executed, execution_claimed "
+            "FROM nuke_state WHERE device_id=?",
+            (device_id,),
+        ).fetchone()
+        if state and (
+            (state["active"] and not state["aborted"] and not state["executed"])
+            or (state["execution_claimed"] and not state["aborted"] and not state["executed"])
+        ):
+            return False
+        unresolved = conn.execute(
+            "SELECT 1 FROM command_outbox WHERE device_id=? AND command='wipe' "
+            "AND destructive=1 AND status IN "
+            "('pending','publishing','broker_acked','device_acknowledged','uncertain') LIMIT 1",
+            (device_id,),
+        ).fetchone()
+        return unresolved is None
 
 def db_get_nuke_state(device_id: str) -> Optional[dict]:
     with db_conn() as conn:
@@ -1490,12 +1526,18 @@ async def nuke_init(req: NukeInitRequest, request: Request):
             record_nuke_fail(device_id)
             raise HTTPException(status_code=403, detail="Invalid TOTP")
         reset_nuke_fails(device_id)
+        if not db_can_arm_nuke_state(device_id):
+            raise HTTPException(
+                status_code=409,
+                detail="A previous destructive operation or countdown is unresolved for this device.",
+            )
         db_delete_nuke_session(device_id)
         state = {
             "active":            True,
             "started_at":        time.time(),
             "aborted":           False,
             "executed":          False,
+            "execution_claimed": False,
             "countdown_seconds": NUKE_COUNTDOWN,
         }
         db_upsert_nuke_state(device_id, state)

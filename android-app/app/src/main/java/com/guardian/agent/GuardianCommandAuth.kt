@@ -151,7 +151,7 @@ internal object GuardianCommandAuth {
         return parsed
     }
 
-    private fun canonicalJson(value: Any?, depth: Int = 0): String {
+    internal fun canonicalJson(value: Any?, depth: Int = 0): String {
         if (depth > 16) throw IllegalArgumentException("JSON nesting exceeds protocol limit")
         return when {
             value == null || value === JSONObject.NULL -> "null"
