@@ -36,6 +36,7 @@ def isolated_device_command_keys(monkeypatch, tmp_path):
         )
         key_id = "synthetic-test-key"
         (directory / "active").write_text(key_id + "\n", encoding="ascii")
+        os.chmod(directory / "active", 0o600)
         (directory / f"{key_id}.private").write_text(
             base64.b64encode(private_raw).decode("ascii") + "\n", encoding="ascii"
         )
