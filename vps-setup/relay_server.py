@@ -616,16 +616,18 @@ def db_delete_session(token: str):
 def db_upsert_nuke_state(device_id: str, state: dict):
     with db_conn() as conn:
         conn.execute(
-            "INSERT INTO nuke_state(device_id, active, started_at, aborted, executed, countdown_secs) "
-            "VALUES(?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET "
+            "INSERT INTO nuke_state(device_id, active, started_at, aborted, executed, execution_claimed, countdown_secs) "
+            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET "
             "active=excluded.active, started_at=excluded.started_at, "
-            "aborted=excluded.aborted, executed=excluded.executed, countdown_secs=excluded.countdown_secs",
+            "aborted=excluded.aborted, executed=excluded.executed, "
+            "execution_claimed=excluded.execution_claimed, countdown_secs=excluded.countdown_secs",
             (
                 device_id,
                 1 if state.get("active") else 0,
                 state.get("started_at", time.time()),
                 1 if state.get("aborted") else 0,
                 1 if state.get("executed") else 0,
+                1 if state.get("execution_claimed") else 0,
                 state.get("countdown_seconds", NUKE_COUNTDOWN),
             ),
         )
