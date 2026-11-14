@@ -104,10 +104,17 @@ systemctl enable mosquitto
 systemctl restart mosquitto
 
 echo "Setting up Guardian relay..."
-install -d -o root -g root -m 700 /opt/guardian /etc/guardian /etc/guardian/command-keys /var/lib/guardian
+# Dedicated unprivileged account: relay code remains root-owned/read-only;
+# only its database directory and explicitly group-readable secrets are accessible.
+getent group guardian >/dev/null || groupadd --system guardian
+id guardian >/dev/null 2>&1 || useradd --system --gid guardian --home-dir /nonexistent --shell /usr/sbin/nologin guardian
+install -d -o root -g root -m 755 /opt/guardian
+install -d -o root -g guardian -m 750 /etc/guardian /etc/guardian/command-keys
+install -d -o guardian -g guardian -m 750 /var/lib/guardian
 cp "$SCRIPT_DIR/relay_server.py" "$SCRIPT_DIR/command_auth.py" "$SCRIPT_DIR/provision_device_key.py" "$SCRIPT_DIR/revoke_device_key.py" /opt/guardian/
-chmod 600 /opt/guardian/relay_server.py /opt/guardian/command_auth.py
-chmod 700 /opt/guardian/provision_device_key.py /opt/guardian/revoke_device_key.py
+chown root:root /opt/guardian/*.py
+chmod 644 /opt/guardian/relay_server.py /opt/guardian/command_auth.py
+chmod 755 /opt/guardian/provision_device_key.py /opt/guardian/revoke_device_key.py
 python3 -m venv /opt/guardian/venv
 /opt/guardian/venv/bin/pip install -r "$SCRIPT_DIR/requirements.txt"
 
@@ -127,8 +134,8 @@ COMMAND_TTL=300
 NUKE_COUNTDOWN=600
 GUARDIAN_DB=/var/lib/guardian/guardian.db
 EOF
-chown root:root /etc/guardian/guardian.env
-chmod 600 /etc/guardian/guardian.env
+chown root:guardian /etc/guardian/guardian.env
+chmod 640 /etc/guardian/guardian.env
 
 echo "Setting up systemd service for relay..."
 cat > /etc/systemd/system/guardian.service << EOF
@@ -136,12 +143,30 @@ cat > /etc/systemd/system/guardian.service << EOF
 Description=Guardian Relay Server
 After=network.target mosquitto.service
 [Service]
+Type=simple
 EnvironmentFile=/etc/guardian/guardian.env
-ExecStart=/opt/guardian/venv/bin/python /opt/guardian/relay_server.py
+ExecStart=/opt/guardian/venv/bin/uvicorn relay_server:app --host 10.99.0.1 --port 8443 --workers 1
 WorkingDirectory=/opt/guardian
-Restart=always
+Restart=on-failure
 RestartSec=5
-User=root
+User=guardian
+Group=guardian
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/var/lib/guardian
 [Install]
 WantedBy=multi-user.target
 EOF

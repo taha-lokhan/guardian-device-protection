@@ -103,16 +103,19 @@ def _device_key_material(device_id: str, *, private: bool) -> tuple[str, str]:
     _validate_device_id(device_id)
     try:
         root_info = _safe_key_path(COMMAND_KEY_DIR, directory=True)
-        if root_info.st_mode & 0o077:
-            raise CommandEnvelopeError("command key root must be mode 0700 or stricter")
+        # The key store is root-owned and group-readable by the dedicated
+        # guardian service account. Group write and all "other" access remain
+        # forbidden; group execute is required to traverse directories.
+        if root_info.st_mode & 0o027:
+            raise CommandEnvelopeError("command key root must be protected mode 0750")
         device_dir = os.path.join(COMMAND_KEY_DIR, device_id)
         device_info = _safe_key_path(device_dir, directory=True)
-        if device_info.st_mode & 0o077:
-            raise CommandEnvelopeError("device key directory must be mode 0700 or stricter")
+        if device_info.st_mode & 0o027:
+            raise CommandEnvelopeError("device key directory must be protected mode 0750")
         active_path = os.path.join(device_dir, "active")
         active_info = _safe_key_path(active_path)
-        if active_info.st_mode & 0o077:
-            raise CommandEnvelopeError("active key pointer must be mode 0600 or stricter")
+        if active_info.st_mode & 0o037:
+            raise CommandEnvelopeError("active key pointer must be protected mode 0640")
         with open(active_path, "r", encoding="ascii") as stream:
             key_id = stream.read(65).strip()
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", key_id):
@@ -120,8 +123,8 @@ def _device_key_material(device_id: str, *, private: bool) -> tuple[str, str]:
         suffix = "private" if private else "public"
         key_path = os.path.join(device_dir, f"{key_id}.{suffix}")
         info = _safe_key_path(key_path)
-        if private and (info.st_mode & 0o077):
-            raise CommandEnvelopeError("device private key permissions must be 0600 or stricter")
+        if private and (info.st_mode & 0o037):
+            raise CommandEnvelopeError("device private key permissions must be protected mode 0640")
         if not private and (info.st_mode & 0o022):
             raise CommandEnvelopeError("device public key must not be group/world writable")
         with open(key_path, "r", encoding="ascii") as stream:
@@ -138,8 +141,8 @@ def _validate_device_key_store() -> None:
         info = _safe_key_path(COMMAND_KEY_DIR, directory=True)
     except (OSError, CommandEnvelopeError) as exc:
         raise RuntimeError("COMMAND_KEY_DIR must exist as a real protected directory") from exc
-    if info.st_mode & 0o077:
-        raise RuntimeError("COMMAND_KEY_DIR must have permissions 0700 or stricter")
+    if info.st_mode & 0o027:
+        raise RuntimeError("COMMAND_KEY_DIR must have protected mode 0750")
 
 
 SESSION_TTL_SECS  = int(os.getenv("SESSION_TTL_SECS",  1800))
