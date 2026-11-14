@@ -23,19 +23,24 @@ Changes in v2.1.0:
 import json, os, sys, time, subprocess, threading, logging, platform
 import urllib.request
 import paho.mqtt.client as mqtt
+import re
+from command_auth import verify_and_claim
 
 MQTT_BROKER   = os.getenv("GUARDIAN_BROKER", "YOUR_VPS_IP")
 MQTT_PORT     = int(os.getenv("GUARDIAN_PORT", 1883))
 MQTT_USER     = os.getenv("GUARDIAN_MQTT_USER", "guardian")
 MQTT_PASS     = os.getenv("GUARDIAN_MQTT_PASS", "changeme")
+COMMAND_KEY_ID = os.getenv("GUARDIAN_COMMAND_KEY_ID", "")
+COMMAND_PUBLIC_KEY = os.getenv("GUARDIAN_COMMAND_PUBLIC_KEY", "")
 DEVICE_ID     = os.getenv("GUARDIAN_DEVICE_ID", f"mac-{platform.node()}")
 ABORT_WINDOW  = int(os.getenv("GUARDIAN_ABORT_WINDOW", 30))
 WG_IP         = os.getenv("GUARDIAN_WG_IP", "")   # WireGuard IP shown in dashboard
 
 # Single source of truth for agent version — referenced in send_status() and logs.
-AGENT_VERSION = "2.2.1"
+AGENT_VERSION = "2.3.0"
 
 LOG_FILE = "/var/log/guardian_mac.log"
+REPLAY_DB_PATH = "/var/db/guardian/command_replay.sqlite3"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -82,6 +87,12 @@ def location_burst(count: int = 5, interval: float = 2.0):
         send_location()
         time.sleep(interval)
 
+def send_ack(command: str, status: str, command_id: str = None):
+    payload = {"command": command, "status": status, "ts": time.time()}
+    if command_id:
+        payload["id"] = command_id
+    client.publish(f"guardian/{DEVICE_ID}/ack", json.dumps(payload), qos=1)
+
 
 def lock_mac() -> bool:
     """
@@ -115,13 +126,9 @@ def lock_mac() -> bool:
     return False
 
 
-def wipe_mac():
+def wipe_mac(command_id: str = None):
     log.warning("WIPE -- Option A: eraseinstall")
-    client.publish(
-        f"guardian/{DEVICE_ID}/ack",
-        json.dumps({"command": "wipe_complete", "status": "initiating", "ts": time.time()}),
-        qos=1,
-    )
+    send_ack("wipe", "initiating", command_id)
     time.sleep(2)
 
     installers = [
@@ -175,7 +182,17 @@ def show_abort_window(seconds: int) -> bool:
 
 
 def handle_command(payload: dict):
+    if not verify_and_claim(
+        payload,
+        public_key=COMMAND_PUBLIC_KEY,
+        expected_key_id=COMMAND_KEY_ID,
+        expected_device_id=DEVICE_ID,
+        replay_db_path=REPLAY_DB_PATH,
+    ):
+        log.warning("Rejected command: signature, target, freshness or replay check failed")
+        return
     command   = payload.get("command")
+    command_id = payload.get("id")
     issued_at = payload.get("issued_at", 0)
     ttl       = payload.get("ttl", 300)
     age = time.time() - issued_at
@@ -185,47 +202,36 @@ def handle_command(payload: dict):
     log.info(f"Command: {command} (age={age:.1f}s)")
 
     if command == "ping":
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "ping", "status": "pong", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("ping", "pong", command_id)
     elif command == "status":
         send_status()
+        send_ack("status", "ok", command_id)
     elif command == "location":
         send_location()
+        send_ack("location", "ok", command_id)
     elif command == "location_burst":
-        threading.Thread(target=location_burst, daemon=True).start()
+        def _location_burst():
+            location_burst()
+            send_ack("location_burst", "ok", command_id)
+        threading.Thread(target=_location_burst, daemon=True).start()
     elif command == "lock":
         ok = lock_mac()
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "lock", "status": "ok" if ok else "failed", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("lock", "ok" if ok else "failed", command_id)
     elif command == "abort_wipe":
         # Signal any running wipe countdown to cancel before execution.
         _wipe_abort_flag.set()
         log.warning("abort_wipe received — wipe abort flag set")
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "abort_wipe", "status": "flag_set", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("abort_wipe", "flag_set", command_id)
     elif command == "wipe":
+        _wipe_abort_flag.clear()  # initialize before the worker can receive an abort
         def do_wipe():
-            _wipe_abort_flag.clear()  # reset flag for this wipe attempt
             if show_abort_window(ABORT_WINDOW) or _wipe_abort_flag.is_set():
                 log.warning("Wipe aborted (local dialog or remote abort_wipe)")
                 _wipe_abort_flag.clear()
-                client.publish(
-                    f"guardian/{DEVICE_ID}/ack",
-                    json.dumps({"command": "wipe_complete", "status": "aborted_locally", "ts": time.time()}),
-                    qos=1,
-                )
+                send_ack("wipe", "aborted_locally", command_id)
                 return
             location_burst(count=5, interval=1.5)
-            wipe_mac()
+            wipe_mac(command_id)
         threading.Thread(target=do_wipe, daemon=True).start()
     else:
         log.warning(f"Unknown command: {command!r}")
@@ -254,11 +260,27 @@ client.on_connect    = lambda c, u, f, rc: (
     c.subscribe(f"guardian/{DEVICE_ID}/command", qos=1),
     send_status(),
 )
-client.on_message    = lambda c, u, msg: threading.Thread(
-    target=handle_command,
-    args=(json.loads(msg.payload.decode()),),
-    daemon=True,
-).start()
+
+
+def on_message(c, u, msg):
+    if len(msg.payload) > 64 * 1024:
+        log.warning("Rejected oversized MQTT command payload")
+        return
+    try:
+        payload = json.loads(msg.payload.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("command envelope must be an object")
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        log.warning("Rejected malformed MQTT command payload")
+        return
+    threading.Thread(
+        target=handle_command,
+        args=(payload,),
+        daemon=True,
+    ).start()
+
+
+client.on_message    = on_message
 client.on_disconnect = lambda c, u, rc: log.warning(f"MQTT disconnected rc={rc}")
 
 
@@ -272,6 +294,10 @@ def heartbeat():
 
 
 if __name__ == "__main__":
+    if (not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", COMMAND_KEY_ID)
+            or not re.fullmatch(r"[A-Za-z0-9+/]{43}=", COMMAND_PUBLIC_KEY)):
+        log.critical("A valid device-specific Ed25519 key ID and base64 public key are required; refusing to connect.")
+        raise SystemExit(1)
     log.info(f"Guardian Mac Agent {AGENT_VERSION} -- {DEVICE_ID}")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     threading.Thread(target=heartbeat, daemon=True).start()

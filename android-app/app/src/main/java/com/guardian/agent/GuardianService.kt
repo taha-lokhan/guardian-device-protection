@@ -24,6 +24,8 @@ class GuardianService : Service() {
     private val DEVICE_ID   get() = prefs.getString("device_id", "phone-01")!!
     private val DEVICE_NAME get() = prefs.getString("device_name", "My Phone")!!
     private val WG_IP       get() = prefs.getString("wg_ip", "")!!
+    private val COMMAND_KEY_ID get() = prefs.getString("command_key_id", "")!!
+    private val COMMAND_PUBLIC_KEY get() = prefs.getString("command_public_key", "")!!
 
     private var mqttClient: MqttAsyncClient? = null
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -36,11 +38,12 @@ class GuardianService : Service() {
     private var wipeCancelIntent: PendingIntent? = null
 
     companion object {
-        const val AGENT_VERSION     = "2.2.0"
+        const val AGENT_VERSION     = "2.3.0"
         const val CHANNEL_ID        = "guardian_service"
         const val NOTIF_ID          = 1001
         const val NOTIF_WIPE_ID     = 1002
         const val ACTION_ABORT_WIPE = "com.guardian.agent.ABORT_WIPE"
+        const val ACTION_RECONFIGURE = "com.guardian.agent.RECONFIGURE"
     }
 
     override fun onCreate() {
@@ -49,26 +52,49 @@ class GuardianService : Service() {
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification("Guardian active"))
         setupLocation()
-        connectMqtt()
         startHeartbeat()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_ABORT_WIPE) {
-            wipeAbortRequested = true
-            Log.i("Guardian", "Wipe abort requested via notification")
-            getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
-            updateNotification("Wipe aborted")
-            mqttPublish(
-                "guardian/$DEVICE_ID/ack",
-                JSONObject().apply {
-                    put("command", "wipe_complete")
-                    put("status", "aborted_locally")
-                    put("ts", System.currentTimeMillis())
-                }.toString()
-            )
+        when (intent?.action) {
+            ACTION_ABORT_WIPE -> {
+                wipeAbortRequested = true
+                Log.i("Guardian", "Wipe abort requested via notification")
+                getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
+                updateNotification("Wipe aborted")
+                // The active wipe worker reports the correlated wipe command ID.
+            }
+            ACTION_RECONFIGURE -> reconfigureMqtt()
+            else -> if (mqttClient == null) connectMqtt()
         }
         return START_STICKY
+    }
+
+    private fun reconfigureMqtt() {
+        val current = mqttClient
+        if (current == null || !current.isConnected) {
+            mqttClient = null
+            connectMqtt()
+            return
+        }
+        try {
+            current.disconnect(0L, null, object : IMqttActionListener {
+                override fun onSuccess(asyncActionToken: IMqttToken?) {
+                    if (mqttClient === current) mqttClient = null
+                    connectMqtt()
+                }
+
+                override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                    Log.w("Guardian", "MQTT disconnect during reconfiguration failed: ${exception?.message}")
+                    if (mqttClient === current) mqttClient = null
+                    connectMqtt()
+                }
+            })
+        } catch (e: Exception) {
+            Log.w("Guardian", "MQTT reconfiguration fallback: ${e.javaClass.simpleName}")
+            mqttClient = null
+            connectMqtt()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -117,6 +143,11 @@ class GuardianService : Service() {
             Log.w("Guardian", "RELAY_IP not configured — skipping MQTT connect until setup is complete")
             return
         }
+        if (!COMMAND_KEY_ID.matches(Regex("^[A-Za-z0-9_-]{1,64}$")) ||
+            !GuardianCommandAuth.isValidPublicKey(COMMAND_PUBLIC_KEY)) {
+            Log.e("Guardian", "Command signing key missing or invalid — refusing MQTT command subscription")
+            return
+        }
         try {
             mqttClient = MqttAsyncClient("tcp://$RELAY_IP:$MQTT_PORT", DEVICE_ID, MemoryPersistence())
             val opts = MqttConnectOptions().apply {
@@ -131,7 +162,15 @@ class GuardianService : Service() {
                     Log.w("Guardian", "MQTT connection lost: ${cause?.message}")
                 }
                 override fun messageArrived(topic: String, message: MqttMessage) {
-                    handleCommand(JSONObject(String(message.payload)))
+                    if (message.payload.size > 64 * 1024) {
+                        Log.w("Guardian", "Rejected oversized MQTT command payload")
+                        return
+                    }
+                    try {
+                        handleCommand(JSONObject(String(message.payload, Charsets.UTF_8)))
+                    } catch (_: Exception) {
+                        Log.w("Guardian", "Rejected malformed MQTT command payload")
+                    }
                 }
                 override fun deliveryComplete(token: IMqttDeliveryToken?) {}
             })
@@ -164,6 +203,16 @@ class GuardianService : Service() {
         }
     }
 
+    private fun sendAck(command: String, status: String, commandId: String?) {
+        val ack = JSONObject().apply {
+            put("command", command)
+            put("status", status)
+            put("ts", System.currentTimeMillis())
+            if (!commandId.isNullOrBlank()) put("id", commandId)
+        }
+        mqttPublish("guardian/$DEVICE_ID/ack", ack.toString())
+    }
+
     private fun startHeartbeat() {
         heartbeatTimer = Timer()
         heartbeatTimer!!.scheduleAtFixedRate(object : TimerTask() {
@@ -189,6 +238,17 @@ class GuardianService : Service() {
     }
 
     private fun handleCommand(cmd: JSONObject) {
+        if (!GuardianCommandAuth.verifyAndClaim(
+                cmd,
+                expectedDeviceId = DEVICE_ID,
+                publicKey = COMMAND_PUBLIC_KEY,
+                expectedKeyId = COMMAND_KEY_ID,
+                context = this
+            )) {
+            Log.w("Guardian", "Rejected command: signature, target, freshness or replay check failed")
+            return
+        }
+
         val issued_at = cmd.optLong("issued_at", 0L)
         val ttl       = cmd.optLong("ttl", 300L)
         val age       = (System.currentTimeMillis() / 1000L) - issued_at
@@ -196,45 +256,44 @@ class GuardianService : Service() {
             Log.w("Guardian", "Command expired (age=${age}s > ttl=${ttl}s), ignored")
             return
         }
-        when (cmd.optString("command")) {
-            "locate", "location" -> lastLocation?.let { publishLocation(it) }
+        val commandId = cmd.optString("id").takeIf { it.isNotBlank() }
+        val command = cmd.optString("command")
+        when (command) {
+            "locate", "location" -> {
+                lastLocation?.let { publishLocation(it) }
+                sendAck(command, "ok", commandId)
+            }
             "location_burst" -> Thread {
                 repeat(5) {
                     lastLocation?.let { publishLocation(it) }
                     Thread.sleep(2_000L)
                 }
+                sendAck("location_burst", "ok", commandId)
             }.start()
-            "status" -> sendHeartbeat()
-            "ping" -> mqttPublish(
-                "guardian/$DEVICE_ID/ack",
-                JSONObject().apply {
-                    put("command", "ping")
-                    put("status", "pong")
-                    put("ts", System.currentTimeMillis())
-                }.toString()
-            )
-            "lock" -> lockDevice()
-            "backup" -> doBackup()
+            "status" -> {
+                sendHeartbeat()
+                sendAck("status", "ok", commandId)
+            }
+            "ping" -> sendAck("ping", "pong", commandId)
+            "lock" -> lockDevice(commandId)
+            "backup" -> doBackup(commandId)
             "abort_wipe" -> {
                 wipeAbortRequested = true
                 getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
                 updateNotification("Wipe aborted remotely")
-                mqttPublish(
-                    "guardian/$DEVICE_ID/ack",
-                    JSONObject().apply {
-                        put("command", "wipe_complete")
-                        put("status", "aborted_locally")
-                        put("ts", System.currentTimeMillis())
-                    }.toString()
-                )
+                sendAck("abort_wipe", "flag_set", commandId)
             }
-            "wipe" -> Thread { doWipeWithAbort() }.start()
-            else -> Log.w("Guardian", "Unknown command: ${cmd.optString("command")}")
+            "wipe" -> {
+                // Set the flag before starting the worker so an immediate remote
+                // abort cannot be overwritten by the worker's initialization.
+                wipeAbortRequested = false
+                Thread { doWipeWithAbort(commandId) }.start()
+            }
+            else -> Log.w("Guardian", "Unknown command: $command")
         }
     }
 
-    private fun doWipeWithAbort() {
-        wipeAbortRequested = false
+    private fun doWipeWithAbort(commandId: String?) {
         val abortIntent = Intent(this, GuardianService::class.java).apply { action = ACTION_ABORT_WIPE }
         wipeCancelIntent = PendingIntent.getService(
             this, 99, abortIntent,
@@ -254,6 +313,7 @@ class GuardianService : Service() {
                 Log.i("Guardian", "Wipe aborted at ${i * 5}s remaining")
                 getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
                 updateNotification("Wipe aborted")
+                sendAck("wipe", "aborted_locally", commandId)
                 return
             }
             Thread.sleep(5_000L)
@@ -261,59 +321,48 @@ class GuardianService : Service() {
         if (wipeAbortRequested) {
             getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
             updateNotification("Wipe aborted")
+            sendAck("wipe", "aborted_locally", commandId)
             return
         }
         Log.i("Guardian", "Wipe countdown complete — executing")
         getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
-        doWipe()
+        doWipe(commandId)
     }
 
-    private fun lockDevice() {
+    private fun lockDevice(commandId: String?) {
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val admin = ComponentName(this, GuardianAdminReceiver::class.java)
         if (dpm.isAdminActive(admin)) {
             dpm.lockNow()
-            mqttPublish(
-                "guardian/$DEVICE_ID/ack",
-                JSONObject().apply {
-                    put("command", "lock")
-                    put("status", "ok")
-                    put("ts", System.currentTimeMillis())
-                }.toString()
-            )
+            sendAck("lock", "ok", commandId)
         } else {
             Log.e("Guardian", "Cannot lock — Device Admin not active")
+            sendAck("lock", "failed_no_admin", commandId)
         }
     }
 
-    private fun doBackup() {
+    private fun doBackup(commandId: String?) {
         // Stub — real backup implementation to be added
-        mqttPublish(
-            "guardian/$DEVICE_ID/ack",
-            JSONObject().apply {
-                put("command", "backup")
-                put("status", "stub_not_implemented")
-                put("ts", System.currentTimeMillis())
-            }.toString()
-        )
+        sendAck("backup", "stub_not_implemented", commandId)
     }
 
-    private fun doWipe() {
+    private fun doWipe(commandId: String?) {
         val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
         val admin = ComponentName(this, GuardianAdminReceiver::class.java)
         if (dpm.isAdminActive(admin)) {
-            mqttPublish(
-                "guardian/$DEVICE_ID/ack",
-                JSONObject().apply {
-                    put("command", "wipe_complete")
-                    put("status", "initiating")
-                    put("ts", System.currentTimeMillis())
-                }.toString()
-            )
-            Thread.sleep(2_000L)
-            dpm.wipeData(DevicePolicyManager.WIPE_EXTERNAL_STORAGE)
+            // This acknowledges initiation only; Android does not provide a
+            // post-reset callback proving that the wipe completed.
+            sendAck("wipe", "initiating", commandId)
+            try {
+                Thread.sleep(2_000L)
+                dpm.wipeData(DevicePolicyManager.WIPE_EXTERNAL_STORAGE)
+            } catch (e: Exception) {
+                Log.e("Guardian", "Wipe request failed: $e")
+                sendAck("wipe", "failed", commandId)
+            }
         } else {
             Log.e("Guardian", "Cannot wipe — Device Admin not active")
+            sendAck("wipe", "failed", commandId)
         }
     }
 

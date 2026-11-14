@@ -10,7 +10,7 @@ Changes in v2.3.0:
   the process is killed.
 - Real backup command: collects SystemInfo, ipconfig /all, last 50 System
   event log entries, current location, and agent metadata; ZIPs them to
-  ProgramData\Guardian\backups\ then POSTs the archive to the relay
+  ProgramData\\Guardian\\backups\\ then POSTs the archive to the relay
   /upload/{device_id} endpoint.
 - Process watchdog thread: if client.loop_forever() returns unexpectedly,
   the watchdog re-execs the script after a 5-second delay.
@@ -37,6 +37,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -50,6 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
+from command_auth import verify_and_claim
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -58,14 +60,17 @@ MQTT_BROKER   = os.getenv("GUARDIAN_BROKER",       "YOUR_VPS_IP")
 MQTT_PORT     = int(os.getenv("GUARDIAN_PORT",      1883))
 MQTT_USER     = os.getenv("GUARDIAN_MQTT_USER",     "guardian")
 MQTT_PASS     = os.getenv("GUARDIAN_MQTT_PASS",     "changeme")
+COMMAND_KEY_ID = os.getenv("GUARDIAN_COMMAND_KEY_ID", "")
+COMMAND_PUBLIC_KEY = os.getenv("GUARDIAN_COMMAND_PUBLIC_KEY", "")
 DEVICE_ID     = os.getenv("GUARDIAN_DEVICE_ID",     f"win-{platform.node()}")
 ABORT_WINDOW  = int(os.getenv("GUARDIAN_ABORT_WINDOW", 30))
 WG_IP         = os.getenv("GUARDIAN_WG_IP",         "")
 RELAY_URL     = os.getenv("GUARDIAN_RELAY_URL",     "").rstrip("/")
-AGENT_VERSION = "2.3.0"
+AGENT_VERSION = "2.4.0"
 
 LOG_DIR      = os.path.join(os.environ.get("PROGRAMDATA", "C:\\ProgramData"), "Guardian")
 BACKUP_DIR   = os.path.join(LOG_DIR, "backups")
+REPLAY_DB_PATH = os.path.join(LOG_DIR, "command_replay.sqlite3")
 os.makedirs(LOG_DIR,    exist_ok=True)
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
@@ -186,6 +191,13 @@ def location_burst(count: int = 5, interval: float = 2.0):
     for _ in range(count):
         send_location()
         time.sleep(interval)
+
+def send_ack(command: str, status: str, command_id: str = None, **extra):
+    payload = {"command": command, "status": status, "ts": time.time()}
+    if command_id:
+        payload["id"] = command_id
+    payload.update(extra)
+    client.publish(f"guardian/{DEVICE_ID}/ack", json.dumps(payload), qos=1)
 
 # ---------------------------------------------------------------------------
 # STATUS
@@ -350,11 +362,16 @@ def _write_reset_config():
     config_path.write_text(xml, encoding="utf-8")
     log.info(f"ResetConfig.xml written to {config_path}")
 
-def wipe_windows():
+def wipe_windows(command_id: str = None):
     log.warning("Wipe initiating")
     client.publish(
         f"guardian/{DEVICE_ID}/ack",
-        json.dumps({"command": "wipe_complete", "status": "initiating", "ts": time.time()}),
+        json.dumps({
+            "command": "wipe",
+            "status": "initiating",
+            "id": command_id,
+            "ts": time.time(),
+        }),
         qos=1,
     )
     time.sleep(2)
@@ -381,7 +398,17 @@ def wipe_windows():
 # COMMAND HANDLER
 # ---------------------------------------------------------------------------
 def handle_command(payload: dict):
+    if not verify_and_claim(
+        payload,
+        public_key=COMMAND_PUBLIC_KEY,
+        expected_key_id=COMMAND_KEY_ID,
+        expected_device_id=DEVICE_ID,
+        replay_db_path=REPLAY_DB_PATH,
+    ):
+        log.warning("Rejected command: signature, target, freshness or replay check failed")
+        return
     command   = payload.get("command")
+    command_id = payload.get("id")
     issued_at = payload.get("issued_at", 0)
     ttl       = payload.get("ttl", 300)
     age = time.time() - issued_at
@@ -391,76 +418,56 @@ def handle_command(payload: dict):
     log.info(f"Command: {command} (age={age:.1f}s)")
 
     if command == "ping":
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "ping", "status": "pong", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("ping", "pong", command_id)
 
     elif command == "status":
         send_status()
+        send_ack("status", "ok", command_id)
 
     elif command == "location":
         send_location()
+        send_ack("location", "ok", command_id)
 
     elif command == "location_burst":
-        threading.Thread(target=location_burst, daemon=True).start()
+        def _location_burst():
+            location_burst()
+            send_ack("location_burst", "ok", command_id)
+        threading.Thread(target=_location_burst, daemon=True).start()
 
     elif command == "lock":
         ctypes.windll.user32.LockWorkStation()
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "lock", "status": "ok", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("lock", "ok", command_id)
 
     elif command == "backup":
         def _do_backup():
             try:
                 zip_path = do_backup()
-                client.publish(
-                    f"guardian/{DEVICE_ID}/ack",
-                    json.dumps({
-                        "command": "backup",
-                        "status":  "ok",
-                        "path":    zip_path,
-                        "ts":      time.time(),
-                    }),
-                    qos=1,
-                )
+                send_ack("backup", "ok", command_id, path=zip_path)
             except Exception as e:
                 log.error(f"Backup failed: {e}")
-                client.publish(
-                    f"guardian/{DEVICE_ID}/ack",
-                    json.dumps({"command": "backup", "status": f"error: {e}", "ts": time.time()}),
-                    qos=1,
-                )
+                send_ack("backup", f"error: {e}", command_id)
         threading.Thread(target=_do_backup, daemon=True).start()
 
     elif command == "abort_wipe":
         _wipe_abort_flag.set()
         log.warning("abort_wipe received — wipe abort flag set")
-        client.publish(
-            f"guardian/{DEVICE_ID}/ack",
-            json.dumps({"command": "abort_wipe", "status": "flag_set", "ts": time.time()}),
-            qos=1,
-        )
+        send_ack("abort_wipe", "flag_set", command_id)
 
     elif command == "wipe":
+        _wipe_abort_flag.clear()
         def do_wipe():
-            _wipe_abort_flag.clear()
             if abort_dialog(ABORT_WINDOW) or _wipe_abort_flag.is_set():
                 log.warning("Wipe aborted (local dialog or remote abort_wipe)")
                 _wipe_abort_flag.clear()
                 client.publish(
                     f"guardian/{DEVICE_ID}/ack",
-                    json.dumps({"command": "wipe_complete", "status": "aborted_locally", "ts": time.time()}),
+                    json.dumps({"command": "wipe", "status": "aborted_locally", "id": command_id, "ts": time.time()}),
                     qos=1,
                 )
                 return
             threading.Thread(target=location_burst, args=(5, 1.5), daemon=True).start()
             time.sleep(5)
-            wipe_windows()
+            wipe_windows(command_id)
         threading.Thread(target=do_wipe, daemon=True).start()
 
     else:
@@ -474,11 +481,27 @@ client.on_connect = lambda c, u, f, rc: (
     c.subscribe(f"guardian/{DEVICE_ID}/command", qos=1),
     send_status(),
 )
-client.on_message = lambda c, u, msg: threading.Thread(
-    target=handle_command,
-    args=(json.loads(msg.payload.decode()),),
-    daemon=True,
-).start()
+
+
+def on_message(c, u, msg):
+    if len(msg.payload) > 64 * 1024:
+        log.warning("Rejected oversized MQTT command payload")
+        return
+    try:
+        payload = json.loads(msg.payload.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("command envelope must be an object")
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        log.warning("Rejected malformed MQTT command payload")
+        return
+    threading.Thread(
+        target=handle_command,
+        args=(payload,),
+        daemon=True,
+    ).start()
+
+
+client.on_message = on_message
 client.on_disconnect = lambda c, u, rc: log.warning(f"Disconnected rc={rc}")
 
 # ---------------------------------------------------------------------------
@@ -496,6 +519,10 @@ def heartbeat():
 # MAIN
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
+    if (not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", COMMAND_KEY_ID)
+            or not re.fullmatch(r"[A-Za-z0-9+/]{43}=", COMMAND_PUBLIC_KEY)):
+        log.critical("A valid device-specific Ed25519 key ID and base64 public key are required; refusing to connect.")
+        raise SystemExit(1)
     log.info(f"Guardian Windows Agent v{AGENT_VERSION} — {DEVICE_ID}")
     ensure_service_registered()
     check_agent_version()

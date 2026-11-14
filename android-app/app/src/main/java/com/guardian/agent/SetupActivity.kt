@@ -9,12 +9,31 @@ import androidx.core.content.ContextCompat
 
 class SetupActivity : AppCompatActivity() {
     private val REQUEST_ENABLE_ADMIN = 1001
+    private var reconfigureExisting = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = getSharedPreferences("guardian", Context.MODE_PRIVATE)
-        if (prefs.getBoolean("configured", false)) { startGuardianService(); return }
+        val alreadyConfigured = prefs.getBoolean("configured", false)
+        reconfigureExisting = alreadyConfigured
         setContentView(R.layout.activity_setup)
+
+        // Keep setup available after activation so an administrator can rotate
+        // MQTT and command-authentication credentials without clearing app data.
+        if (alreadyConfigured) {
+            findViewById<EditText>(R.id.et_device_name).setText(prefs.getString("device_name", ""))
+            findViewById<EditText>(R.id.et_device_id).setText(prefs.getString("device_id", ""))
+            findViewById<EditText>(R.id.et_relay_ip).setText(prefs.getString("relay_ip", ""))
+            findViewById<EditText>(R.id.et_wg_ip).setText(prefs.getString("wg_ip", ""))
+            findViewById<EditText>(R.id.et_mqtt_pass).setText(prefs.getString("mqtt_pass", ""))
+            findViewById<EditText>(R.id.et_command_key_id).setText(
+                prefs.getString("command_key_id", "")
+            )
+            findViewById<EditText>(R.id.et_command_public_key).setText(
+                prefs.getString("command_public_key", "")
+            )
+            findViewById<Button>(R.id.btn_save).text = "UPDATE GUARDIAN CONFIG"
+        }
 
         findViewById<Button>(R.id.btn_save).setOnClickListener {
             val relayIp    = findViewById<EditText>(R.id.et_relay_ip).text.toString().trim()
@@ -22,9 +41,17 @@ class SetupActivity : AppCompatActivity() {
             val deviceId   = findViewById<EditText>(R.id.et_device_id).text.toString().trim()
             val deviceName = findViewById<EditText>(R.id.et_device_name).text.toString().trim()
             val wgIp       = findViewById<EditText>(R.id.et_wg_ip).text.toString().trim()
+            val commandKeyId = findViewById<EditText>(R.id.et_command_key_id).text.toString().trim()
+            val commandPublicKey = findViewById<EditText>(R.id.et_command_public_key).text.toString().trim()
 
-            if (relayIp.isEmpty() || mqttPass.isEmpty() || deviceId.isEmpty()) {
-                Toast.makeText(this, "All fields required", Toast.LENGTH_SHORT).show()
+            if (relayIp.isEmpty() || mqttPass.isEmpty() || deviceId.isEmpty() ||
+                !commandKeyId.matches(Regex("^[A-Za-z0-9_-]{1,64}$")) ||
+                !GuardianCommandAuth.isValidPublicKey(commandPublicKey)) {
+                Toast.makeText(
+                    this,
+                    "Relay, MQTT, device ID and the device-specific Ed25519 key ID/public key are required.",
+                    Toast.LENGTH_LONG
+                ).show()
                 return@setOnClickListener
             }
 
@@ -34,6 +61,8 @@ class SetupActivity : AppCompatActivity() {
                 .putString("device_id",  deviceId)
                 .putString("device_name", deviceName)
                 .putString("wg_ip",      wgIp)
+                .putString("command_key_id", commandKeyId)
+                .putString("command_public_key", commandPublicKey)
                 .putBoolean("configured", true)
                 .apply()
 
@@ -59,8 +88,12 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun startGuardianService() {
-        ContextCompat.startForegroundService(this, Intent(this, GuardianService::class.java))
-        Toast.makeText(this, "Guardian is active", Toast.LENGTH_LONG).show()
+        val serviceIntent = Intent(this, GuardianService::class.java)
+        if (reconfigureExisting) {
+            serviceIntent.action = GuardianService.ACTION_RECONFIGURE
+        }
+        ContextCompat.startForegroundService(this, serviceIntent)
+        Toast.makeText(this, "Guardian configuration saved", Toast.LENGTH_LONG).show()
         finish()
     }
 }

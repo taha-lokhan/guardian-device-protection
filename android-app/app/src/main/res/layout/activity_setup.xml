@@ -15,31 +15,43 @@
         <EditText android:id="@+id/et_device_name"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="Device Name (e.g. My Phone)" android:inputType="text"
-            android:textColor="#cdccca" android:hintTextColor="#5a5957"
+            android:textColor="#cdccca" android:textColorHint="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
 
         <EditText android:id="@+id/et_device_id"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="Device ID (e.g. phone-01)" android:inputType="text"
-            android:textColor="#cdccca" android:hintTextColor="#5a5957"
+            android:textColor="#cdccca" android:textColorHint="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
 
         <EditText android:id="@+id/et_relay_ip"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="Relay VPS IP or hostname (e.g. 203.0.113.10)" android:inputType="text"
-            android:textColor="#cdccca" android:hintTextColor="#5a5957"
+            android:textColor="#cdccca" android:textColorHint="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
 
         <EditText android:id="@+id/et_wg_ip"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="This device WireGuard IP (e.g. 10.99.0.2)" android:inputType="text"
-            android:textColor="#cdccca" android:hintTextColor="#5a5957"
+            android:textColor="#cdccca" android:textColorHint="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
 
         <EditText android:id="@+id/et_mqtt_pass"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:hint="MQTT Password (from credentials file)" android:inputType="textPassword"
-            android:textColor="#cdccca" android:hintTextColor="#5a5957"
+            android:textColor="#cdccca" android:textColorHint="#5a5957"
+            android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
+
+        <EditText android:id="@+id/et_command_key_id"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Device Command Key ID" android:inputType="textNoSuggestions"
+            android:textColor="#cdccca" android:textColorHint="#5a5957"
+            android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="16dp"/>
+
+        <EditText android:id="@+id/et_command_public_key"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:hint="Device Ed25519 Public Key (base64)" android:inputType="textNoSuggestions"
+            android:textColor="#cdccca" android:textColorHint="#5a5957"
             android:background="#1c1b19" android:padding="16dp" android:layout_marginBottom="32dp"/>
 
         <Button android:id="@+id/btn_save"

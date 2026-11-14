@@ -79,9 +79,9 @@ jobs:
       - name: Zip binary + installer
         working-directory: mac-agent
         run: |
-          cp install_mac.sh dist/install_mac.sh
+          cp install_mac.sh guardian_mac_agent.py command_auth.py dist/
           cd dist
-          zip -r guardian-mac-agent.zip guardian_mac_agent install_mac.sh
+          zip -r guardian-mac-agent.zip guardian_mac_agent guardian_mac_agent.py command_auth.py install_mac.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
