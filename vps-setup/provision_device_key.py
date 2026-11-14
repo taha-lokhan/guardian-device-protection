@@ -6,6 +6,7 @@ never leaves the host; only the base64 public key is printed for agent setup.
 """
 import argparse
 import base64
+import grp
 import os
 import re
 import secrets
@@ -42,14 +43,22 @@ def main() -> int:
     parser.add_argument("--key-dir", default="/etc/guardian/command-keys")
     parser.add_argument("--rotate", action="store_true")
     args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.error("run as root so key ownership can be set safely")
     if not DEVICE_RE.fullmatch(args.device_id):
         parser.error("invalid device ID")
+    try:
+        service_gid = grp.getgrnam("guardian").gr_gid
+    except KeyError:
+        parser.error("guardian service group does not exist; run the VPS installer first")
     root = Path(args.key_dir)
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(root, 0o700)
+    root.mkdir(mode=0o750, parents=True, exist_ok=True)
+    os.chown(root, 0, service_gid)
+    os.chmod(root, 0o750)
     device_dir = root / args.device_id
-    device_dir.mkdir(mode=0o700, exist_ok=True)
-    os.chmod(device_dir, 0o700)
+    device_dir.mkdir(mode=0o750, exist_ok=True)
+    os.chown(device_dir, 0, service_gid)
+    os.chmod(device_dir, 0o750)
     active = device_dir / "active"
     if active.exists() and not args.rotate:
         parser.error("device already has an active key; use --rotate after preparing agent reconfiguration")
@@ -69,9 +78,12 @@ def main() -> int:
     )
     private_path = device_dir / f"{key_id}.private"
     public_path = device_dir / f"{key_id}.public"
-    atomic_write(private_path, base64.b64encode(private_raw) + b"\n", 0o600)
+    atomic_write(private_path, base64.b64encode(private_raw) + b"\n", 0o640)
+    os.chown(private_path, 0, service_gid)
     atomic_write(public_path, base64.b64encode(public_raw) + b"\n", 0o644)
-    atomic_write(active, (key_id + "\n").encode(), 0o600)
+    os.chown(public_path, 0, service_gid)
+    atomic_write(active, (key_id + "\n").encode(), 0o640)
+    os.chown(active, 0, service_gid)
     print("Provisioning complete. Keep the private key on the relay host.")
     print(f"device_id={args.device_id}")
     print(f"key_id={key_id}")
