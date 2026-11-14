@@ -23,19 +23,24 @@ Changes in v2.1.0:
 import json, os, sys, time, subprocess, threading, logging, platform
 import urllib.request
 import paho.mqtt.client as mqtt
+import re
+from command_auth import verify_and_claim
 
 MQTT_BROKER   = os.getenv("GUARDIAN_BROKER", "YOUR_VPS_IP")
 MQTT_PORT     = int(os.getenv("GUARDIAN_PORT", 1883))
 MQTT_USER     = os.getenv("GUARDIAN_MQTT_USER", "guardian")
 MQTT_PASS     = os.getenv("GUARDIAN_MQTT_PASS", "changeme")
+COMMAND_KEY_ID = os.getenv("GUARDIAN_COMMAND_KEY_ID", "")
+COMMAND_PUBLIC_KEY = os.getenv("GUARDIAN_COMMAND_PUBLIC_KEY", "")
 DEVICE_ID     = os.getenv("GUARDIAN_DEVICE_ID", f"mac-{platform.node()}")
 ABORT_WINDOW  = int(os.getenv("GUARDIAN_ABORT_WINDOW", 30))
 WG_IP         = os.getenv("GUARDIAN_WG_IP", "")   # WireGuard IP shown in dashboard
 
 # Single source of truth for agent version — referenced in send_status() and logs.
-AGENT_VERSION = "2.2.1"
+AGENT_VERSION = "2.3.0"
 
 LOG_FILE = "/var/log/guardian_mac.log"
+REPLAY_DB_PATH = "/var/db/guardian/command_replay.sqlite3"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -177,6 +182,15 @@ def show_abort_window(seconds: int) -> bool:
 
 
 def handle_command(payload: dict):
+    if not verify_and_claim(
+        payload,
+        public_key=COMMAND_PUBLIC_KEY,
+        expected_key_id=COMMAND_KEY_ID,
+        expected_device_id=DEVICE_ID,
+        replay_db_path=REPLAY_DB_PATH,
+    ):
+        log.warning("Rejected command: signature, target, freshness or replay check failed")
+        return
     command   = payload.get("command")
     command_id = payload.get("id")
     issued_at = payload.get("issued_at", 0)
@@ -246,11 +260,27 @@ client.on_connect    = lambda c, u, f, rc: (
     c.subscribe(f"guardian/{DEVICE_ID}/command", qos=1),
     send_status(),
 )
-client.on_message    = lambda c, u, msg: threading.Thread(
-    target=handle_command,
-    args=(json.loads(msg.payload.decode()),),
-    daemon=True,
-).start()
+
+
+def on_message(c, u, msg):
+    if len(msg.payload) > 64 * 1024:
+        log.warning("Rejected oversized MQTT command payload")
+        return
+    try:
+        payload = json.loads(msg.payload.decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("command envelope must be an object")
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        log.warning("Rejected malformed MQTT command payload")
+        return
+    threading.Thread(
+        target=handle_command,
+        args=(payload,),
+        daemon=True,
+    ).start()
+
+
+client.on_message    = on_message
 client.on_disconnect = lambda c, u, rc: log.warning(f"MQTT disconnected rc={rc}")
 
 
@@ -264,6 +294,10 @@ def heartbeat():
 
 
 if __name__ == "__main__":
+    if (not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", COMMAND_KEY_ID)
+            or not re.fullmatch(r"[A-Za-z0-9+/]{43}=", COMMAND_PUBLIC_KEY)):
+        log.critical("A valid device-specific Ed25519 key ID and base64 public key are required; refusing to connect.")
+        raise SystemExit(1)
     log.info(f"Guardian Mac Agent {AGENT_VERSION} -- {DEVICE_ID}")
     client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     threading.Thread(target=heartbeat, daemon=True).start()

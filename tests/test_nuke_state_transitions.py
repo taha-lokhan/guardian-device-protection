@@ -5,6 +5,7 @@ mocked; no real device receives a command and no wipe is executed.
 """
 import asyncio
 import sqlite3
+import time
 import sys
 from pathlib import Path
 
@@ -136,3 +137,51 @@ def test_existing_database_gets_execution_claimed_migration(tmp_path, monkeypatc
     with sqlite3.connect(db_path) as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(nuke_state)")}
     assert "execution_claimed" in columns
+
+
+def test_unresolved_execution_claim_cannot_be_reset_or_rearmed(isolated_db):
+    arm()
+    assert relay.db_claim_nuke_execution("test-device") is True
+    state = relay.db_get_nuke_state("test-device")
+    assert state["execution_claimed"] is True
+
+    with pytest.raises(ValueError, match="unresolved destructive execution claim"):
+        relay.db_upsert_nuke_state("test-device", {
+            "active": True,
+            "started_at": time.time(),
+            "aborted": False,
+            "executed": False,
+            "execution_claimed": False,
+            "countdown_seconds": 600,
+        })
+    assert relay.db_can_arm_nuke_state("test-device") is False
+    assert relay.db_get_nuke_state("test-device")["execution_claimed"] is True
+
+
+def test_terminal_execution_can_be_rearmed_with_a_fresh_claim(isolated_db):
+    arm()
+    assert relay.db_claim_nuke_execution("test-device") is True
+    state = relay.db_get_nuke_state("test-device")
+    state["executed"] = True
+    relay.db_upsert_nuke_state("test-device", state)
+
+    assert relay.db_can_arm_nuke_state("test-device") is True
+    relay.db_upsert_nuke_state("test-device", {
+        "active": True,
+        "started_at": time.time(),
+        "aborted": False,
+        "executed": False,
+        "execution_claimed": False,
+        "countdown_seconds": 600,
+    })
+    fresh = relay.db_get_nuke_state("test-device")
+    assert fresh["active"] is True
+    assert fresh["execution_claimed"] is False
+
+
+def test_unresolved_destructive_outbox_blocks_rearm_even_without_state(isolated_db):
+    relay.db_enqueue_outbox_command(
+        "test-device", "wipe", {}, "44444444-4444-4444-8444-444444444444",
+        time.time(), 300, destructive=True,
+    )
+    assert relay.db_can_arm_nuke_state("test-device") is False

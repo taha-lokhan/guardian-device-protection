@@ -24,6 +24,8 @@ class GuardianService : Service() {
     private val DEVICE_ID   get() = prefs.getString("device_id", "phone-01")!!
     private val DEVICE_NAME get() = prefs.getString("device_name", "My Phone")!!
     private val WG_IP       get() = prefs.getString("wg_ip", "")!!
+    private val COMMAND_KEY_ID get() = prefs.getString("command_key_id", "")!!
+    private val COMMAND_PUBLIC_KEY get() = prefs.getString("command_public_key", "")!!
 
     private var mqttClient: MqttAsyncClient? = null
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -36,11 +38,12 @@ class GuardianService : Service() {
     private var wipeCancelIntent: PendingIntent? = null
 
     companion object {
-        const val AGENT_VERSION     = "2.2.0"
+        const val AGENT_VERSION     = "2.3.0"
         const val CHANNEL_ID        = "guardian_service"
         const val NOTIF_ID          = 1001
         const val NOTIF_WIPE_ID     = 1002
         const val ACTION_ABORT_WIPE = "com.guardian.agent.ABORT_WIPE"
+        const val ACTION_RECONFIGURE = "com.guardian.agent.RECONFIGURE"
     }
 
     override fun onCreate() {
@@ -49,19 +52,49 @@ class GuardianService : Service() {
         createNotificationChannel()
         startForeground(NOTIF_ID, buildNotification("Guardian active"))
         setupLocation()
-        connectMqtt()
         startHeartbeat()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_ABORT_WIPE) {
-            wipeAbortRequested = true
-            Log.i("Guardian", "Wipe abort requested via notification")
-            getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
-            updateNotification("Wipe aborted")
-            // The active wipe worker reports the correlated wipe command ID.
+        when (intent?.action) {
+            ACTION_ABORT_WIPE -> {
+                wipeAbortRequested = true
+                Log.i("Guardian", "Wipe abort requested via notification")
+                getSystemService(NotificationManager::class.java).cancel(NOTIF_WIPE_ID)
+                updateNotification("Wipe aborted")
+                // The active wipe worker reports the correlated wipe command ID.
+            }
+            ACTION_RECONFIGURE -> reconfigureMqtt()
+            else -> if (mqttClient == null) connectMqtt()
         }
         return START_STICKY
+    }
+
+    private fun reconfigureMqtt() {
+        val current = mqttClient
+        if (current == null || !current.isConnected) {
+            mqttClient = null
+            connectMqtt()
+            return
+        }
+        try {
+            current.disconnect(0L, null, object : IMqttActionListener {
+                override fun onSuccess(asyncActionToken: IMqttToken?) {
+                    if (mqttClient === current) mqttClient = null
+                    connectMqtt()
+                }
+
+                override fun onFailure(asyncActionToken: IMqttToken?, exception: Throwable?) {
+                    Log.w("Guardian", "MQTT disconnect during reconfiguration failed: ${exception?.message}")
+                    if (mqttClient === current) mqttClient = null
+                    connectMqtt()
+                }
+            })
+        } catch (e: Exception) {
+            Log.w("Guardian", "MQTT reconfiguration fallback: ${e.javaClass.simpleName}")
+            mqttClient = null
+            connectMqtt()
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -110,6 +143,11 @@ class GuardianService : Service() {
             Log.w("Guardian", "RELAY_IP not configured — skipping MQTT connect until setup is complete")
             return
         }
+        if (!COMMAND_KEY_ID.matches(Regex("^[A-Za-z0-9_-]{1,64}$")) ||
+            !GuardianCommandAuth.isValidPublicKey(COMMAND_PUBLIC_KEY)) {
+            Log.e("Guardian", "Command signing key missing or invalid — refusing MQTT command subscription")
+            return
+        }
         try {
             mqttClient = MqttAsyncClient("tcp://$RELAY_IP:$MQTT_PORT", DEVICE_ID, MemoryPersistence())
             val opts = MqttConnectOptions().apply {
@@ -124,7 +162,15 @@ class GuardianService : Service() {
                     Log.w("Guardian", "MQTT connection lost: ${cause?.message}")
                 }
                 override fun messageArrived(topic: String, message: MqttMessage) {
-                    handleCommand(JSONObject(String(message.payload)))
+                    if (message.payload.size > 64 * 1024) {
+                        Log.w("Guardian", "Rejected oversized MQTT command payload")
+                        return
+                    }
+                    try {
+                        handleCommand(JSONObject(String(message.payload, Charsets.UTF_8)))
+                    } catch (_: Exception) {
+                        Log.w("Guardian", "Rejected malformed MQTT command payload")
+                    }
                 }
                 override fun deliveryComplete(token: IMqttDeliveryToken?) {}
             })
@@ -192,6 +238,17 @@ class GuardianService : Service() {
     }
 
     private fun handleCommand(cmd: JSONObject) {
+        if (!GuardianCommandAuth.verifyAndClaim(
+                cmd,
+                expectedDeviceId = DEVICE_ID,
+                publicKey = COMMAND_PUBLIC_KEY,
+                expectedKeyId = COMMAND_KEY_ID,
+                context = this
+            )) {
+            Log.w("Guardian", "Rejected command: signature, target, freshness or replay check failed")
+            return
+        }
+
         val issued_at = cmd.optLong("issued_at", 0L)
         val ttl       = cmd.optLong("ttl", 300L)
         val age       = (System.currentTimeMillis() / 1000L) - issued_at
