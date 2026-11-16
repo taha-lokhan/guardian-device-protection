@@ -465,6 +465,17 @@ body::after{
   }
 
   function resetRelayUrl() {
+    // Revoke the current server-side session before changing relay URLs.
+    if (API && authToken) {
+      fetch(API + '/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + authToken,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ token: authToken })
+      }).catch(function() {});
+    }
     // Show auth screen again to change URL
     API = '';
     authToken = '';
@@ -491,7 +502,16 @@ body::after{
       }
     };
     if (body) { opts.body = JSON.stringify(body); }
-    return fetch(API + path, opts);
+    return fetch(API + path, opts).then(function(res) {
+      if (res.status === 401 && authToken) {
+        authToken = '';
+        var overlay = document.getElementById('authOverlay');
+        overlay.style.display = 'flex';
+        overlay.style.opacity = '1';
+        document.getElementById('authErr').textContent = '[!] Session expired — sign in again';
+      }
+      return res;
+    });
   }
 
   function doLogin() {
@@ -505,28 +525,37 @@ body::after{
     // Normalise: ensure http:// or https:// prefix
     if (!/^https?:\/\//.test(relayRaw)) { relayRaw = 'http://' + relayRaw; }
     API = relayRaw;
-    authToken = pass + ':' + totp;
-    apiFetch('/devices').then(function(res) {
-      if (res.ok) {
-        updateRelayDisplay();
-        var ov = document.getElementById('authOverlay');
-        ov.style.transition = 'opacity .4s';
-        ov.style.opacity = '0';
-        setTimeout(function() { ov.style.display = 'none'; }, 400);
-        addLog('Authentication successful — relay: ' + API, 'ok');
-        startDashboard();
-      } else {
-        document.getElementById('authErr').textContent = '[!] Invalid credentials';
-        authToken = '';
-        API = '';
-        var box = document.querySelector('.auth-box');
-        box.style.animation = 'shake .3s ease';
-        setTimeout(function() { box.style.animation = ''; }, 300);
+    document.getElementById('authErr').textContent = '';
+    fetch(API + '/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pass, totp: totp })
+    }).then(function(res) {
+      return res.json().then(function(data) {
+        if (!res.ok || !data.token) {
+          throw new Error(data.detail || 'Authentication failed');
+        }
+        authToken = data.token;
+        return apiFetch('/devices');
+      });
+    }).then(function(res) {
+      if (!res.ok) {
+        throw new Error('Session validation failed');
       }
-    }).catch(function() {
-      document.getElementById('authErr').textContent = '[!] Connection failed — check relay URL';
+      updateRelayDisplay();
+      var ov = document.getElementById('authOverlay');
+      ov.style.transition = 'opacity .4s';
+      ov.style.opacity = '0';
+      setTimeout(function() { ov.style.display = 'none'; }, 400);
+      addLog('Authentication successful — relay: ' + API, 'ok');
+      startDashboard();
+    }).catch(function(err) {
       authToken = '';
-      API = '';
+      document.getElementById('authErr').textContent =
+        err && err.message ? '[!] ' + err.message : '[!] Connection failed — check relay URL';
+      var box = document.querySelector('.auth-box');
+      box.style.animation = 'shake .3s ease';
+      setTimeout(function() { box.style.animation = ''; }, 300);
     });
   }
 
