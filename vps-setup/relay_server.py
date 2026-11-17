@@ -178,9 +178,20 @@ def _validate_device_id(device_id: str) -> str:
 # ---------------------------------------------------------------------------
 # DATABASE
 # ---------------------------------------------------------------------------
+# Explicit lock-wait budget for concurrent API, MQTT and background-task writes.
+DB_BUSY_TIMEOUT_MS = max(0, int(os.getenv("DB_BUSY_TIMEOUT_MS", "5000")))
+
+
 def get_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(
+        DB_PATH,
+        timeout=DB_BUSY_TIMEOUT_MS / 1000,
+        check_same_thread=False,
+    )
     conn.row_factory = sqlite3.Row
+    # Set explicitly on every connection; sqlite3's timeout argument alone is
+    # not sufficient documentation of the effective connection-level policy.
+    conn.execute(f"PRAGMA busy_timeout={DB_BUSY_TIMEOUT_MS}")
     return conn
 
 @contextlib.contextmanager
@@ -197,6 +208,9 @@ def db_conn():
 
 def init_db():
     with db_conn() as conn:
+        # WAL allows readers to continue while a writer commits. Keep SQLite's
+        # default synchronous durability rather than weakening it to NORMAL.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS device_status (
                 device_id   TEXT PRIMARY KEY,
